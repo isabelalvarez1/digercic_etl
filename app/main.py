@@ -110,7 +110,7 @@ def main():
         logger.error("Configuracion invalida. Abortando.")
         return
 
-    pipeline_name = config.get("pipeline.name", "desconocido")
+    pipeline_name = loader.get("pipeline.name", "desconocido")
     logger.info(f"Pipeline: {pipeline_name}")
 
     data = run_extract(config)
