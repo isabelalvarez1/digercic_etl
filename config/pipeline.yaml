@@ -1,0 +1,98 @@
+# ============================
+# ETL DIGERCIC - Configuracion del Pipeline
+# ============================
+
+pipeline:
+  name: "digercic_etl"
+  description: "Pipeline ETL DIGERCIC - Oracle a PostgreSQL"
+  version: "1.0.0"
+
+# ============================
+# Paso 1: EXTRACT
+# ============================
+extract:
+  source: oracle
+  enabled: true
+  query: |
+    SELECT
+      id,
+      nombre,
+      fecha_registro,
+      estado
+    FROM tabla_origen
+    WHERE fecha_registro >= TO_DATE(:fecha_inicio, 'YYYY-MM-DD')
+  params:
+    fecha_inicio: "2024-01-01"
+  batch_size: 1000
+
+# ============================
+# Paso 2: TRANSFORM
+# ============================
+transform:
+  enabled: true
+  operations:
+    - name: limpiar_nulos
+      type: drop_nulls
+      columns:
+        - id
+        - nombre
+
+    - name: formatear_fechas
+      type: cast
+      columns:
+        fecha_registro:
+          type: date
+          format: "%Y-%m-%d"
+
+    - name: normalizar_texto
+      type: replace
+      column: nombre
+      patterns:
+        - find: "\\s+"
+          replace: " "
+          regex: true
+
+# ============================
+# Paso 3: LOAD
+# ============================
+load:
+  target: postgres
+  enabled: true
+  table: "destino_tabla"
+  mode: upsert
+  primary_key: id
+  batch_size: 500
+  on_conflict: update
+
+# ============================
+# Configuracion de Pool Oracle
+# ============================
+oracle_pool:
+  min_connections: 2
+  max_connections: 10
+  increment: 2
+
+# ============================
+# Configuracion de Pool PostgreSQL
+# ============================
+postgres_pool:
+  min_connections: 2
+  max_connections: 10
+  increment: 2
+
+# ============================
+# Logging
+# ============================
+logging:
+  level: INFO
+  file: "app/logs/digercic_etl.log"
+  format: "%(asctime)s | %(levelname)s | %(message)s"
+
+# ============================
+# Monitoreo
+# ============================
+monitoring:
+  enabled: true
+  log_stats: true
+  save_metrics: true
+  metrics_file: "app/logs/metrics.json"
