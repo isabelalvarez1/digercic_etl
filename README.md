@@ -1,101 +1,112 @@
-# ETL DIGERCIC
+# ETL DIGERCIC - Arquitectura Multi-Fuente
 
-Proyecto ETL para extraer datos desde Oracle, transformarlos y cargarlos en PostgreSQL.
+Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Server, archivos) y cargarlos en un Data Warehouse.
 
 ## Arquitectura
 
-El pipeline se configura mediante un archivo YAML (`config/pipeline.yaml`) que define cada paso del proceso ETL.
-
 ```
-config/pipeline.yaml  -->  main.py  -->  Extract  -->  Transform  -->  Load
-     |                                      |              |              |
-     v                                      v              v              v
- Deficion                          Oracle Pool     Polars/Python   PostgreSQL Pool
+                    ┌─────────────────────────────────────────────┐
+                    │         PIPELINE MANAGER (Orquestador)      │
+                    │     Coordina Extract → Transform → Load     │
+                    └───────────────────────┬─────────────────────┘
+                                            │
+        ┌───────────────┬───────────────┬───┴───┬───────────────┐
+        ▼               ▼               ▼       ▼               ▼
+   ┌─────────┐    ┌──────────┐    ┌─────────┐ ┌─────────┐  ┌─────────┐
+   │ Oracle  │    │PostgreSQL│    │SQL Server│ │  CSV    │  │ Excel   │
+   └────┬────┘    └────┬─────┘    └────┬────┘ └────┬────┘  └────┬────┘
+        │              │              │           │             │
+        └──────────────┴──────┬───────┴───────────┴─────────────┘
+                              ▼
+                    ┌─────────────────┐
+                    │   DATA LAKE     │
+                    │  (PostgreSQL)   │
+                    └────────┬────────┘
+                             ▼
+                    ┌─────────────────┐
+                    │ DATA WAREHOUSE  │
+                    │   (Futuro)      │
+                    └─────────────────┘
 ```
 
-## Estado del Proyecto
-
-| Modulo | Estado | Descripcion |
-|--------|--------|-------------|
-| `config/settings.py` | Completo | Variables de entorno desde `.env` |
-| `config/logging_config.py` | Completo | Logger a archivo y consola |
-| `config/config_loader.py` | Completo | Carga configuracion YAML |
-| `config/pipeline.yaml` | Completo | Definicion del pipeline ETL |
-| `database/oracle_pool.py` | Completo | Pool de conexiones Oracle |
-| `main.py` | Completo | Orquestador ETL basado en YAML |
-| `database/postgres_pool.py` | Vacio | Pendiente implementar |
-| `extract/oracle_extractor.py` | Vacio | Pendiente implementar |
-| `transform/digercic_transform.py` | Vacio | Pendiente implementar |
-| `load/postgres_loader.py` | Vacio | Pendiente implementar |
-
-## Estructura
+## Estructura del Proyecto
 
 ```
 digercic_etl/
-├── config/
-│   └── pipeline.yaml           # Configuracion del pipeline ETL
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                 # Orquestador ETL
+│   ├── core/                          # Nucleo de la arquitectura
+│   │   ├── __init__.py
+│   │   ├── factory.py                 # Factory Pattern
+│   │   ├── pipeline_manager.py        # Orquestador ETL
+│   │   ├── extractors/                # Extractores por fuente
+│   │   │   ├── __init__.py
+│   │   │   ├── base_extractor.py      # Clase abstracta
+│   │   │   ├── oracle_extractor.py    # Oracle
+│   │   │   ├── postgres_extractor.py  # PostgreSQL
+│   │   │   ├── sqlserver_extractor.py # SQL Server
+│   │   │   └── file_extractor.py      # CSV, Excel, TXT, JSON
+│   │   ├── loaders/                   # Loaders por destino
+│   │   │   ├── __init__.py
+│   │   │   ├── base_loader.py         # Clase abstracta
+│   │   │   ├── postgres_loader.py     # PostgreSQL
+│   │   │   ├── sqlserver_loader.py    # SQL Server
+│   │   │   └── file_loader.py         # CSV, Excel, JSON
+│   │   ├── transformers/              # Transformaciones
+│   │   │   └── __init__.py
+│   │   └── connections/               # Pool de conexiones
+│   │       └── __init__.py
 │   ├── config/
 │   │   ├── __init__.py
-│   │   ├── config_loader.py    # Loader de YAML
-│   │   ├── logging_config.py   # Config de logging
-│   │   └── settings.py         # Variables de entorno
-│   ├── database/
-│   │   ├── __init__.py
-│   │   ├── oracle_pool.py      # Pool Oracle
-│   │   └── postgres_pool.py    # Pool PostgreSQL (vacio)
-│   ├── extract/
-│   │   ├── __init__.py
-│   │   └── oracle_extractor.py # Extractor Oracle (vacio)
-│   ├── transform/
-│   │   ├── __init__.py
-│   │   └── digercic_transform.py # Transform (vacio)
-│   ├── load/
-│   │   ├── __init__.py
-│   │   └── postgres_loader.py  # Loader PostgreSQL (vacio)
-│   ├── pipelines/
-│   │   └── __init__.py
-│   ├── utils/
-│   │   └── __init__.py
+│   │   ├── config_loader.py           # Loader de YAML
+│   │   ├── logging_config.py          # Config de logging
+│   │   └── settings.py                # Variables de entorno
+│   ├── main.py                        # Punto de entrada
 │   └── logs/
-├── tests/
-├── .env                        # NO se sube al repositorio
-├── .env.example                # Plantilla de variables
+├── config/
+│   └── pipeline.yaml                  # Configuracion del pipeline
+├── .env                               # Credenciales (NO se sube)
+├── .env.example                       # Plantilla
 ├── .gitignore
 ├── README.md
 └── requirements.txt
 ```
 
+## Fuentes de Datos Soportadas
+
+| Fuente | Tipo | Extractor | Loader |
+|--------|------|-----------|--------|
+| Oracle | Base de datos | `OracleExtractor` | - |
+| PostgreSQL | Base de datos | `PostgresExtractor` | `PostgresLoader` |
+| SQL Server | Base de datos | `SqlServerExtractor` | `SqlServerLoader` |
+| CSV | Archivo | `FileExtractor` | `FileLoader` |
+| Excel | Archivo | `FileExtractor` | - |
+| TXT | Archivo | `FileExtractor` | - |
+| JSON | Archivo | `FileExtractor` | `FileLoader` |
+
 ## Configuracion YAML
 
-El archivo `config/pipeline.yaml` define:
-
 ```yaml
-pipeline:
-  name: "digercic_etl"
-  version: "1.0.0"
+extractions:
+  - name: oracle_data
+    source: oracle
+    config:
+      host: ${ORACLE_HOST}
+      port: ${ORACLE_PORT}
+      service: ${ORACLE_SERVICE}
+      user: ${ORACLE_USER}
+      password: ${ORACLE_PASSWORD}
+    query: "SELECT * FROM tabla"
+    params: {}
 
-extract:
-  source: oracle
-  enabled: true
-  query: "SELECT * FROM tabla"
-  params:
-    fecha_inicio: "2024-01-01"
-
-transform:
-  enabled: true
-  operations:
-    - name: limpiar_nulos
-      type: drop_nulls
-      columns: [id, nombre]
-
-load:
-  target: postgres
-  enabled: true
-  table: "destino_tabla"
-  mode: upsert
+loads:
+  - name: load_to_pg
+    source: oracle_data
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      database: ${POSTGRES_DATABASE}
+    table: "destino"
+    mode: upsert
 ```
 
 ## Instalacion
@@ -107,8 +118,7 @@ cd digercic_etl
 
 # Crear entorno virtual
 python -m venv .venv
-.venv\Scripts\activate      # Windows
-# source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate
 
 # Instalar dependencias
 pip install -r requirements.txt
@@ -127,48 +137,73 @@ python main.py
 
 ## Variables de Entorno
 
-Copiar `.env.example` a `.env` y completar:
+```env
+# Oracle
+ORACLE_HOST=10.91.254.20
+ORACLE_PORT=1521
+ORACLE_SERVICE=DBINTERO
+ORACLE_USER=MIN_DESARROLLO_HUMANO
+ORACLE_PASSWORD=xxxxxx
 
-| Variable | Descripcion | Default |
-|----------|-------------|---------|
-| ORACLE_HOST | Host de Oracle | - |
-| ORACLE_PORT | Puerto Oracle | 1521 |
-| ORACLE_SERVICE | Service name de Oracle | - |
-| ORACLE_USER | Usuario de Oracle | - |
-| ORACLE_PASSWORD | Password de Oracle | - |
-| POSTGRES_HOST | Host de PostgreSQL | - |
-| POSTGRES_PORT | Puerto PostgreSQL | 5432 |
-| POSTGRES_DATABASE | Base de datos PostgreSQL | - |
-| POSTGRES_USER | Usuario de PostgreSQL | - |
-| POSTGRES_PASSWORD | Password de PostgreSQL | - |
+# PostgreSQL
+POSTGRES_HOST=192.168.95.24
+POSTGRES_PORT=5432
+POSTGRES_DATABASE=datalake
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=xxxxxx
+
+# SQL Server (opcional)
+SQLSERVER_HOST=
+SQLSERVER_PORT=1433
+SQLSERVER_DATABASE=
+SQLSERVER_USER=
+SQLSERVER_PASSWORD=
+```
 
 ## Dependencias
 
 | Paquete | Uso |
 |---------|-----|
-| `python-dotenv` | Variables de entorno |
-| `pyyaml` | Configuracion YAML |
-| `oracledb` | Conexion a Oracle |
-| `psycopg` | Conexion a PostgreSQL |
+| `oracledb` | Conexion Oracle |
+| `psycopg` | Conexion PostgreSQL |
+| `pyodbc` | Conexion SQL Server |
 | `polars` | Manipulacion de datos |
 | `pyarrow` | Soporte Apache Arrow |
-| `pydantic` | Validacion de datos |
+| `pyyaml` | Configuracion |
+| `python-dotenv` | Variables de entorno |
 | `structlog` | Logging estructurado |
 
-## Flujo del Pipeline
+## Patron Factory
 
-1. **Extract** - Lee datos de Oracle segun query definida en YAML
-2. **Transform** - Aplica operaciones (drop_nulls, cast, replace, etc.)
-3. **Load** - Inserta/upsert en PostgreSQL
+La arquitectura usa el patron Factory para crear extractores y loaders dinamicamente:
 
-## Git
+```python
+from core.factory import ExtractorFactory, LoaderFactory
 
-El archivo `.env` esta excluido del repositorio via `.gitignore` para proteger las credenciales.
+# Crear extractor
+extractor = ExtractorFactory.create("oracle", config)
+data = extractor.execute(query)
 
-Para subir cambios:
+# Crear loader
+loader = LoaderFactory.create("postgresql", config)
+loader.execute(data, "tabla_destino")
+```
 
-```bash
-git add .
-git commit -m "mensaje descriptivo"
-git push origin master
+## Escalabilidad
+
+Para agregar una nueva fuente de datos:
+
+1. Crear extractor en `core/extractors/`
+2. Heredar de `BaseExtractor`
+3. Implementar `connect()`, `extract()`, `disconnect()`
+4. Registrar en `ExtractorFactory`
+
+```python
+class MongoExtractor(BaseExtractor):
+    def connect(self): ...
+    def extract(self, query, params): ...
+    def disconnect(self): ...
+
+# Registrar
+ExtractorFactory.register("mongodb", MongoExtractor)
 ```

@@ -1,0 +1,174 @@
+import concurrent.futures
+from typing import Any, Dict, List
+from datetime import datetime
+from config.logging_config import logger
+from core.factory import ExtractorFactory, LoaderFactory
+
+
+class PipelineManager:
+    """
+    Orquestador de pipelines ETL.
+    
+    Ejecuta multiples fuentes de datos en paralelo o secuencialmente.
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.results = {}
+
+    def run(self) -> Dict[str, Any]:
+        """
+        Ejecuta el pipeline completo definido en la configuracion.
+        
+        Returns:
+            Diccionario con resultados de cada paso
+        """
+        logger.info("=" * 50)
+        logger.info("PIPELINE MANAGER - INICIO")
+        logger.info("=" * 50)
+
+        start_time = datetime.now()
+
+        try:
+            # Obtener configuraciones de extraccion
+            extractions = self.config.get("extractions", [])
+            
+            if not extractions:
+                logger.warning("No hay extracciones configuradas")
+                return {}
+
+            # Ejecutar extracciones
+            all_data = {}
+            
+            # Verificar si hay dependencias
+            parallel_mode = self.config.get("parallel", True)
+            
+            if parallel_mode:
+                all_data = self._run_parallel(extractions)
+            else:
+                all_data = self._run_sequential(extractions)
+
+            # Ejecutar transformaciones si existen
+            transformations = self.config.get("transformations", {})
+            if transformations:
+                all_data = self._run_transformations(all_data, transformations)
+
+            # Ejecutar cargas
+            loads = self.config.get("loads", [])
+            load_results = self._run_loads(all_data, loads)
+
+            elapsed = (datetime.now() - start_time).seconds
+
+            result = {
+                "status": "completed",
+                "elapsed_seconds": elapsed,
+                "extractions": {k: len(v) for k, v in all_data.items()},
+                "loads": load_results,
+            }
+
+            logger.info("=" * 50)
+            logger.info(f"PIPELINE COMPLETADO en {elapsed}s")
+            logger.info("=" * 50)
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Error en pipeline: {e}")
+            raise
+
+    def _run_parallel(self, extractions: List[Dict]) -> Dict[str, List]:
+        """Ejecuta extracciones en paralelo."""
+        logger.info("Modo: PARALELO")
+        all_data = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {}
+
+            for ext_config in extractions:
+                name = ext_config.get("name", "unnamed")
+                source_type = ext_config.get("source")
+                source_config = ext_config.get("config", {})
+                query = ext_config.get("query", "")
+                params = ext_config.get("params", {})
+
+                extractor = ExtractorFactory.create(source_type, source_config)
+                future = executor.submit(extractor.execute, query, params)
+                futures[future] = name
+
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
+                try:
+                    data = future.result()
+                    all_data[name] = data
+                    logger.info(f"[{name}] Extraidas {len(data)} filas")
+                except Exception as e:
+                    logger.exception(f"[{name}] Error en extraccion: {e}")
+                    all_data[name] = []
+
+        return all_data
+
+    def _run_sequential(self, extractions: List[Dict]) -> Dict[str, List]:
+        """Ejecuta extracciones secuencialmente."""
+        logger.info("Modo: SECUENCIAL")
+        all_data = {}
+
+        for ext_config in extractions:
+            name = ext_config.get("name", "unnamed")
+            source_type = ext_config.get("source")
+            source_config = ext_config.get("config", {})
+            query = ext_config.get("query", "")
+            params = ext_config.get("params", {})
+
+            try:
+                extractor = ExtractorFactory.create(source_type, source_config)
+                data = extractor.execute(query, params)
+                all_data[name] = data
+                logger.info(f"[{name}] Extraidas {len(data)} filas")
+            except Exception as e:
+                logger.exception(f"[{name}] Error en extraccion: {e}")
+                all_data[name] = []
+
+        return all_data
+
+    def _run_transformations(self, data: Dict[str, List], config: Dict) -> Dict[str, List]:
+        """Ejecuta transformaciones sobre los datos."""
+        logger.info("Ejecutando transformaciones...")
+        
+        # Por ahora retorna los datos sin transformar
+        # Se puede extender con transformers personalizados
+        return data
+
+    def _run_loads(self, data: Dict[str, List], loads: List[Dict]) -> Dict[str, int]:
+        """Ejecuta las cargas en los destinos."""
+        logger.info("Ejecutando cargas...")
+        load_results = {}
+
+        for load_config in loads:
+            name = load_config.get("name", "unnamed")
+            target_type = load_config.get("target")
+            target_config = load_config.get("config", {})
+            source_name = load_config.get("source")
+            table = load_config.get("table", "")
+            mode = load_config.get("mode", "insert")
+
+            if source_name not in data:
+                logger.warning(f"[{name}] Fuente '{source_name}' no encontrada")
+                continue
+
+            source_data = data[source_name]
+
+            if not source_data:
+                logger.warning(f"[{name}] No hay datos para cargar")
+                load_results[name] = 0
+                continue
+
+            try:
+                loader = LoaderFactory.create(target_type, target_config)
+                rows_loaded = loader.execute(source_data, table, mode)
+                load_results[name] = rows_loaded
+                logger.info(f"[{name}] Cargadas {rows_loaded} filas en {table}")
+            except Exception as e:
+                logger.exception(f"[{name}] Error en carga: {e}")
+                load_results[name] = 0
+
+        return load_results
