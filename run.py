@@ -1,6 +1,11 @@
-import yaml
-import os
+import sys
 from pathlib import Path
+
+# Agregar carpeta app al path
+app_dir = Path(__file__).parent / "app"
+sys.path.insert(0, str(app_dir))
+
+import yaml
 from dotenv import load_dotenv
 from config.logging_config import logger
 from core.pipeline_manager import PipelineManager
@@ -18,12 +23,12 @@ def main():
 
     try:
         # Cargar variables de entorno
-        env_path = Path(__file__).parent.parent / ".env"
+        env_path = Path(__file__).parent / ".env"
         load_dotenv(env_path)
         logger.info(f"Variables de entorno cargadas desde: {env_path}")
 
         # Cargar configuracion
-        config_path = Path(__file__).parent.parent / "config" / "pipeline.yaml"
+        config_path = Path(__file__).parent / "config" / "pipeline.yaml"
 
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
