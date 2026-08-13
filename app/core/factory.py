@@ -4,15 +4,10 @@ from config.logging_config import logger
 # Extractors
 from core.extractors.base_extractor import BaseExtractor
 from core.extractors.oracle_extractor import OracleExtractor
-from core.extractors.postgres_extractor import PostgresExtractor
-from core.extractors.sqlserver_extractor import SqlServerExtractor
-from core.extractors.file_extractor import FileExtractor
 
 # Loaders
 from core.loaders.base_loader import BaseLoader
 from core.loaders.postgres_loader import PostgresLoader
-from core.loaders.sqlserver_loader import SqlServerLoader
-from core.loaders.file_loader import FileLoader
 
 
 class ExtractorFactory:
@@ -21,24 +16,10 @@ class ExtractorFactory:
     
     Tipos soportados:
     - oracle: Oracle Database
-    - postgresql: PostgreSQL
-    - sqlserver: SQL Server
-    - csv: Archivos CSV
-    - excel: Archivos Excel (.xlsx, .xls)
-    - txt: Archivos TXT delimitados
-    - json: Archivos JSON
     """
 
     _extractors: Dict[str, Type[BaseExtractor]] = {
         "oracle": OracleExtractor,
-        "postgresql": PostgresExtractor,
-        "postgres": PostgresExtractor,
-        "sqlserver": SqlServerExtractor,
-        "csv": FileExtractor,
-        "excel": FileExtractor,
-        "txt": FileExtractor,
-        "json": FileExtractor,
-        "file": FileExtractor,
     }
 
     @classmethod
@@ -47,7 +28,7 @@ class ExtractorFactory:
         Crea un extractor segun el tipo de fuente.
         
         Args:
-            source_type: Tipo de fuente (oracle, postgresql, csv, etc.)
+            source_type: Tipo de fuente (oracle)
             config: Configuracion de la conexion
             
         Returns:
@@ -88,20 +69,11 @@ class LoaderFactory:
     
     Tipos soportados:
     - postgresql: PostgreSQL
-    - sqlserver: SQL Server
-    - csv: Archivos CSV
-    - excel: Archivos Excel
-    - json: Archivos JSON
     """
 
     _loaders: Dict[str, Type[BaseLoader]] = {
         "postgresql": PostgresLoader,
         "postgres": PostgresLoader,
-        "sqlserver": SqlServerLoader,
-        "csv": FileLoader,
-        "excel": FileLoader,
-        "json": FileLoader,
-        "file": FileLoader,
     }
 
     @classmethod
@@ -110,7 +82,7 @@ class LoaderFactory:
         Crea un loader segun el tipo de destino.
         
         Args:
-            target_type: Tipo de destino (postgresql, sqlserver, csv, etc.)
+            target_type: Tipo de destino (postgresql)
             config: Configuracion del destino
             
         Returns:
@@ -138,5 +110,5 @@ class LoaderFactory:
 
     @classmethod
     def get_supported_targets(cls) -> list:
-        """Retorna la lista de destinos soportados."""
+        """Retorna la lista de destinos soportadas."""
         return list(cls._loaders.keys())
