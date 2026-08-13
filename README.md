@@ -30,27 +30,32 @@ Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Se
 ```
 digercic_etl/
 ├── app/
+│   ├── __init__.py
+│   ├── main.py                        # Punto de entrada
 │   ├── core/                          # Nucleo de la arquitectura
+│   │   ├── __init__.py
 │   │   ├── factory.py                 # Factory Pattern (ExtractorFactory/LoaderFactory)
 │   │   ├── pipeline_manager.py        # Orquestador ETL con resolucion de variables
 │   │   ├── extractors/                # Extractores por fuente
+│   │   │   ├── __init__.py
 │   │   │   ├── base_extractor.py      # Clase abstracta con patron template
 │   │   │   ├── oracle_extractor.py    # Oracle (oracledb, batch OFFSET/FETCH)
 │   │   │   ├── postgres_extractor.py  # PostgreSQL (psycopg)
 │   │   │   ├── sqlserver_extractor.py # SQL Server (pyodbc)
 │   │   │   └── file_extractor.py      # CSV, Excel, TXT, JSON (Polars)
-│   │   ├── loaders/                   # Loaders por destino
-│   │   │   ├── base_loader.py         # Clase abstracta
-│   │   │   ├── postgres_loader.py     # PostgreSQL (Polars batch, column_mapping)
-│   │   │   ├── sqlserver_loader.py    # SQL Server (pyodbc)
-│   │   │   └── file_loader.py         # CSV, Excel, JSON (Polars)
-│   │   └── transformers/              # Transformaciones (futuro)
+│   │   └── loaders/                   # Loaders por destino
+│   │       ├── __init__.py
+│   │       ├── base_loader.py         # Clase abstracta
+│   │       ├── postgres_loader.py     # PostgreSQL (Polars batch, column_mapping)
+│   │       ├── sqlserver_loader.py    # SQL Server (pyodbc)
+│   │       └── file_loader.py         # CSV, Excel, JSON (Polars)
 │   ├── config/
+│   │   ├── __init__.py
 │   │   ├── config_loader.py           # Loader de YAML con get() dot-notation
 │   │   ├── logging_config.py          # Config de logging
 │   │   └── settings.py                # Variables de entorno desde .env
-│   ├── main.py                        # Punto de entrada
 │   └── logs/
+│       └── digercic_etl.log
 ├── config/
 │   └── pipeline.yaml                  # Configuracion del pipeline (multi-tabla)
 ├── .env                               # Credenciales (NO se sube a git)
@@ -107,7 +112,7 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       column_mapping:              # Mapeo Oracle → PostgreSQL
-        CAMPAA: campana_n
+        CAMPAA: campana
     table: "clientes"
     mode: insert
 ```
@@ -126,7 +131,7 @@ Para manejar diferencias de nombres de columnas entre origen y destino:
 
 ```yaml
 column_mapping:
-        CAMPAA: campana        # Oracle (encoding normalizado) → PostgreSQL
+  CAMPAA: campana        # Oracle (encoding normalizado) → PostgreSQL
   NOMBRE_LARGO: nombre     # Otro mapeo
 ```
 
