@@ -18,6 +18,7 @@ class PostgresLoader(BaseLoader):
         self.batch_size = config.get("batch_size", 5000)
         self.column_mapping = config.get("column_mapping", {})
         self.normalize_columns = config.get("normalize_columns", True)
+        self.truncate_before_load = config.get("truncate_before_load", False)
 
     def _normalize_column_name(self, col: str) -> str:
         """
@@ -99,6 +100,14 @@ class PostgresLoader(BaseLoader):
                     logger.info(f"[PostgresLoader] Mapeo aplicado: {valid_mapping}")
             
             logger.info(f"[PostgresLoader] DataFrame: {df.height} filas, {df.width} columnas")
+            
+            cursor = self.connection.cursor()
+            
+            # Truncar tabla si esta habilitado
+            if self.truncate_before_load:
+                cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
+                self.connection.commit()
+                logger.info(f"[PostgresLoader] Tabla {table} truncada")
             
             # Obtener nombres de columnas
             columns = df.columns

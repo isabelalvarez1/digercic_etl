@@ -60,6 +60,7 @@ loads:
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
+      truncate_before_load: true
     table: "clientes"
     mode: insert
 
@@ -74,6 +75,7 @@ loads:
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
+      truncate_before_load: true
       column_mapping:
         CAMPAA: campana
     table: "captaciones"
