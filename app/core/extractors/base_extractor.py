@@ -31,13 +31,14 @@ class BaseExtractor(ABC):
         pass
 
     @abstractmethod
-    def extract(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
+    def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         """
         Extrae datos de la fuente.
         
         Args:
             query: Consulta a ejecutar (SQL, ruta de archivo, etc.)
             params: Parametros adicionales
+            table_name: Nombre de la tabla para logging
             
         Returns:
             Lista de diccionarios con los datos
@@ -49,19 +50,19 @@ class BaseExtractor(ABC):
         """Cierra la conexion con la fuente."""
         pass
 
-    def execute(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
+    def execute(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         """
         Ejecuta el proceso completo de extraccion.
         
         Returns:
             Lista de diccionarios con los datos extraidos
         """
-        logger.info(f"[{self.__class__.__name__}] Iniciando extraccion...")
+        logger.info(f"[{self.__class__.__name__}] Iniciando extraccion para {table_name}...")
         self._stats["start_time"] = datetime.now()
 
         try:
             self.connect()
-            data = self.extract(query, params)
+            data = self.extract(query, params, table_name)
             self._stats["rows_extracted"] = len(data)
             return data
 

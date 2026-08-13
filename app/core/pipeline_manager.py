@@ -33,6 +33,34 @@ class PipelineManager:
             return [self._resolve_env_vars(item) for item in config]
         return config
 
+    def _validate_resources(self) -> bool:
+        """Valida que los recursos necesarios esten disponibles."""
+        logger.info("[PipelineManager] Validando recursos...")
+        
+        # Verificar que existan extractors y loaders
+        supported_sources = ExtractorFactory.get_supported_sources()
+        supported_targets = LoaderFactory.get_supported_targets()
+        
+        logger.info(f"[PipelineManager] Fuentes soportadas: {supported_sources}")
+        logger.info(f"[PipelineManager] Destinos soportados: {supported_targets}")
+        
+        # Verificar configuraciones
+        extractions = self.config.get("extractions", [])
+        loads = self.config.get("loads", [])
+        
+        logger.info(f"[PipelineManager] Extracciones configuradas: {len(extractions)}")
+        logger.info(f"[PipelineManager] Cargas configuradas: {len(loads)}")
+        
+        # Validar que cada extraccion tenga su carga correspondiente
+        extraction_names = [e.get("name") for e in extractions]
+        for load in loads:
+            source_name = load.get("source")
+            if source_name not in extraction_names:
+                logger.warning(f"[PipelineManager] Carga '{load.get('name')}' referencia fuente '{source_name}' que no existe")
+        
+        logger.info("[PipelineManager] Validacion completada")
+        return True
+
     def run(self) -> Dict[str, Any]:
         """
         Ejecuta el pipeline completo definido en la configuracion.
@@ -47,7 +75,11 @@ class PipelineManager:
         start_time = datetime.now()
 
         try:
+            # Validar recursos
+            self._validate_resources()
+            
             # Resolver variables de entorno en toda la configuracion
+            logger.info("[PipelineManager] Resolviendo variables de entorno...")
             self.config = self._resolve_env_vars(self.config)
             
             # Obtener configuraciones de extraccion
@@ -110,9 +142,12 @@ class PipelineManager:
                 source_config = ext_config.get("config", {})
                 query = ext_config.get("query", "")
                 params = ext_config.get("params", {})
+                
+                # Obtener nombre de tabla del query
+                table_name = self._extract_table_name(query)
 
                 extractor = ExtractorFactory.create(source_type, source_config)
-                future = executor.submit(extractor.execute, query, params)
+                future = executor.submit(extractor.execute, query, params, table_name)
                 futures[future] = name
 
             for future in concurrent.futures.as_completed(futures):
@@ -138,10 +173,13 @@ class PipelineManager:
             source_config = ext_config.get("config", {})
             query = ext_config.get("query", "")
             params = ext_config.get("params", {})
+            
+            # Obtener nombre de tabla del query
+            table_name = self._extract_table_name(query)
 
             try:
                 extractor = ExtractorFactory.create(source_type, source_config)
-                data = extractor.execute(query, params)
+                data = extractor.execute(query, params, table_name)
                 all_data[name] = data
                 logger.info(f"[{name}] Extraidas {len(data)} filas")
             except Exception as e:
@@ -149,6 +187,14 @@ class PipelineManager:
                 all_data[name] = []
 
         return all_data
+
+    def _extract_table_name(self, query: str) -> str:
+        """Extrae el nombre de la tabla del query SQL."""
+        # Buscar patrones como "FROM tabla" o "INTO tabla"
+        match = re.search(r'(?:FROM|INTO|UPDATE)\s+(\w+)', query, re.IGNORECASE)
+        if match:
+            return match.group(1).lower()
+        return "unknown"
 
     def _run_transformations(self, data: Dict[str, List], config: Dict) -> Dict[str, List]:
         """Ejecuta transformaciones sobre los datos."""
@@ -171,60 +217,23 @@ class PipelineManager:
             table = load_config.get("table", "")
             mode = load_config.get("mode", "insert")
 
-            # Logger especifico para esta tabla
-            table_logger = setup_table_logger(table)
-
             if source_name not in data:
-                table_logger.warning(f"[{name}] Fuente '{source_name}' no encontrada")
+                logger.warning(f"[{name}] Fuente '{source_name}' no encontrada")
                 continue
 
             source_data = data[source_name]
 
             if not source_data:
-                table_logger.warning(f"[{name}] No hay datos para cargar")
+                logger.warning(f"[{name}] No hay datos para cargar")
                 load_results[name] = 0
                 continue
-
-            # Log de inicio de carga
-            load_start = datetime.now()
-            table_logger.info(f"{'='*50}")
-            table_logger.info(f"INICIO CARGA: {table}")
-            table_logger.info(f"Tabla destino: {table}")
-            table_logger.info(f"Modo: {mode}")
-            table_logger.info(f"Registros a cargar: {len(source_data)}")
-            table_logger.info(f"Fecha inicio: {load_start.strftime('%Y-%m-%d %H:%M:%S')}")
-            table_logger.info(f"{'-'*50}")
 
             try:
                 loader = LoaderFactory.create(target_type, target_config)
                 rows_loaded = loader.execute(source_data, table, mode)
-                
-                # Calcular tiempo de carga
-                load_end = datetime.now()
-                load_duration = (load_end - load_start).total_seconds()
-                
                 load_results[name] = rows_loaded
-                
-                # Log de exito con tiempo
-                table_logger.info(f"{'-'*50}")
-                table_logger.info(f"ESTADO: EXITOSO")
-                table_logger.info(f"Registros cargados: {rows_loaded}")
-                table_logger.info(f"Fecha fin: {load_end.strftime('%Y-%m-%d %H:%M:%S')}")
-                table_logger.info(f"Tiempo de carga: {load_duration:.2f} segundos")
-                table_logger.info(f"{'='*50}")
-                
             except Exception as e:
-                # Log de error con tiempo
-                load_end = datetime.now()
-                load_duration = (load_end - load_start).total_seconds()
-                
-                table_logger.error(f"{'-'*50}")
-                table_logger.error(f"ESTADO: ERROR")
-                table_logger.error(f"Error: {str(e)}")
-                table_logger.error(f"Fecha fin: {load_end.strftime('%Y-%m-%d %H:%M:%S')}")
-                table_logger.error(f"Tiempo hasta error: {load_duration:.2f} segundos")
-                table_logger.error(f"{'='*50}")
-                
+                logger.exception(f"[{name}] Error en carga: {e}")
                 load_results[name] = 0
 
         return load_results

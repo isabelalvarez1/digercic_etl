@@ -1,8 +1,10 @@
 import polars as pl
 import oracledb
 from typing import Any, Dict, List, Optional
-from config.logging_config import logger
+from datetime import datetime
+from config.logging_config import logger, setup_table_logger
 from core.extractors.base_extractor import BaseExtractor
+from core.utils import get_system_resources, calculate_optimal_batch_size
 
 
 class OracleExtractor(BaseExtractor):
@@ -31,6 +33,7 @@ class OracleExtractor(BaseExtractor):
             dsn = f"{host}:{port}/{service}"
 
             logger.info(f"[OracleExtractor] Conectando a {dsn}...")
+            logger.info(f"[OracleExtractor] Usuario: {user}")
 
             self.connection = oracledb.connect(
                 user=user,
@@ -39,17 +42,17 @@ class OracleExtractor(BaseExtractor):
             )
 
             self._connected = True
-            logger.info(f"[OracleExtractor] Conectado a {host}:{port}/{service}")
+            logger.info(f"[OracleExtractor] Conexion exitosa a {host}:{port}/{service}")
 
         except Exception as e:
             logger.exception(f"[OracleExtractor] Error de conexion: {e}")
             raise
 
-    def extract(self, query: str, params: Optional[Dict] = None) -> List[Dict]:
+    def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         """
         Extrae datos de Oracle usando Polars con lotes.
         
-        Para tablas grandes, usa FETCH FIRST n ROWS ONLY para procesar por lotes.
+        Para tablas grandes, usa OFFSET/FETCH NEXT para procesar por lotes.
         """
         if not self._connected:
             self.connect()
@@ -57,25 +60,72 @@ class OracleExtractor(BaseExtractor):
         if params is None:
             params = {}
 
+        # Logger especifico para esta tabla
+        table_logger = setup_table_logger(table_name)
+        extraction_start = datetime.now()
+
         try:
-            cursor = self.connection.cursor()
+            # Paso 1: Detectar recursos del sistema
+            table_logger.info(f"{'='*50}")
+            table_logger.info(f"INICIO EXTRACCION: {table_name}")
+            table_logger.info(f"Fecha inicio: {extraction_start.strftime('%Y-%m-%d %H:%M:%S')}")
+            table_logger.info(f"{'-'*50}")
             
-            # Obtener columnas
+            table_logger.info("Paso 1/6: Detectando recursos del sistema...")
+            resources = get_system_resources()
+            table_logger.info(f"  CPU Cores Logicales: {resources['cpu_cores_logical']}")
+            table_logger.info(f"  CPU Cores Fisicos: {resources['cpu_cores_physical']}")
+            table_logger.info(f"  Memoria Total: {resources['memory_total_gb']} GB")
+            table_logger.info(f"  Memoria Disponible: {resources['memory_available_gb']} GB")
+            table_logger.info(f"  Memoria Usada: {resources['memory_percent_used']}%")
+            
+            # Paso 2: Preparar cursor
+            table_logger.info("Paso 2/6: Preparando cursor...")
+            cursor = self.connection.cursor()
+            table_logger.info("  Cursor creado")
+            
+            # Paso 3: Obtener columnas
+            table_logger.info("Paso 3/6: Obteniendo estructura de la tabla...")
             cursor.execute(query + " WHERE ROWNUM <= 1")
             columns = [desc[0] for desc in cursor.description]
+            table_logger.info(f"  Columnas encontradas: {len(columns)}")
+            table_logger.info(f"  Nombres: {', '.join(columns)}")
             
-            # Contar total de registros
+            # Paso 4: Contar registros
+            table_logger.info("Paso 4/6: Contando registros totales...")
             count_query = f"SELECT COUNT(*) FROM ({query})"
             cursor.execute(count_query)
             total_rows = cursor.fetchone()[0]
-            logger.info(f"[OracleExtractor] Total registros a extraer: {total_rows}")
+            table_logger.info(f"  Total registros: {total_rows}")
             
-            # Extraer por lotes
+            # Paso 5: Calcular lotes optimos
+            table_logger.info("Paso 5/6: Calculando lotes optimos...")
+            batch_info = calculate_optimal_batch_size(total_rows, resources)
+            
+            # Usar batch_size del config si es mayor al calculado
+            final_batch_size = max(self.batch_size, batch_info["batch_size"])
+            final_batch_count = (total_rows + final_batch_size - 1) // final_batch_size
+            
+            table_logger.info(f"  Batch Size Configurado: {self.batch_size}")
+            table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
+            table_logger.info(f"  Batch Size Final: {final_batch_size}")
+            table_logger.info(f"  Total Lotes: {final_batch_count}")
+            table_logger.info(f"  Registros por Core: {batch_info['rows_per_core']}")
+            table_logger.info(f"  Memoria Estimada por Lote: {batch_info['estimated_memory_mb']} MB")
+            
+            # Paso 6: Extraer datos
+            table_logger.info("Paso 6/6: Extrayendo datos...")
+            table_logger.info(f"{'-'*50}")
+            
             all_data = []
             offset = 0
+            batch_num = 0
             
             while offset < total_rows:
-                batch_query = f"{query} OFFSET {offset} ROWS FETCH NEXT {self.batch_size} ROWS ONLY"
+                batch_num += 1
+                batch_start = datetime.now()
+                
+                batch_query = f"{query} OFFSET {offset} ROWS FETCH NEXT {final_batch_size} ROWS ONLY"
                 cursor.execute(batch_query, params)
                 rows = cursor.fetchall()
                 
@@ -86,26 +136,61 @@ class OracleExtractor(BaseExtractor):
                 batch_data = [dict(zip(columns, row)) for row in rows]
                 all_data.extend(batch_data)
                 
-                offset += self.batch_size
-                logger.info(f"[OracleExtractor] Procesados {min(offset, total_rows)}/{total_rows} registros")
+                offset += final_batch_size
+                batch_end = datetime.now()
+                batch_duration = (batch_end - batch_start).total_seconds()
+                
+                # Calcular porcentaje completado
+                percent_complete = (len(all_data) / total_rows) * 100 if total_rows > 0 else 100
+                
+                table_logger.info(f"  CHUNK {batch_num}/{final_batch_count}")
+                table_logger.info(f"    Registros: {len(rows)}")
+                table_logger.info(f"    Chunk Size: {final_batch_size}")
+                table_logger.info(f"    Offset: {offset - final_batch_size}")
+                table_logger.info(f"    Tiempo: {batch_duration:.2f}s")
+                table_logger.info(f"    Progreso: {percent_complete:.1f}%")
+                table_logger.info(f"    Acumulado: {len(all_data)}/{total_rows}")
             
             cursor.close()
             
-            logger.info(f"[OracleExtractor] Extraccion completada: {len(all_data)} registros")
+            # Resumen de extraccion
+            extraction_end = datetime.now()
+            extraction_duration = (extraction_end - extraction_start).total_seconds()
+            
+            table_logger.info(f"{'-'*50}")
+            table_logger.info(f"EXTRACCION COMPLETADA")
+            table_logger.info(f"  Registros extraidos: {len(all_data)}")
+            table_logger.info(f"  Chunks procesados: {batch_num}")
+            table_logger.info(f"  Chunk Size utilizado: {final_batch_size}")
+            table_logger.info(f"  Tiempo total: {extraction_duration:.2f} segundos")
+            table_logger.info(f"  Velocidad: {len(all_data)/extraction_duration:.0f} registros/segundo" if extraction_duration > 0 else "  Velocidad: N/A")
+            table_logger.info(f"  CPU Cores utilizados: {resources['cpu_cores_logical']}")
+            table_logger.info(f"  Memoria disponible: {resources['memory_available_gb']} GB")
+            table_logger.info(f"Fecha fin: {extraction_end.strftime('%Y-%m-%d %H:%M:%S')}")
+            table_logger.info(f"{'='*50}")
             
             return all_data
 
         except Exception as e:
+            extraction_end = datetime.now()
+            extraction_duration = (extraction_end - extraction_start).total_seconds()
+            
+            table_logger.error(f"{'-'*50}")
+            table_logger.error(f"ERROR EN EXTRACCION")
+            table_logger.error(f"  Error: {str(e)}")
+            table_logger.error(f"  Tiempo hasta error: {extraction_duration:.2f} segundos")
+            table_logger.error(f"{'='*50}")
+            
             logger.exception(f"[OracleExtractor] Error en extraccion: {e}")
             raise
 
-    def extract_to_polars(self, query: str, params: Optional[Dict] = None) -> pl.DataFrame:
+    def extract_to_polars(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> pl.DataFrame:
         """
         Extrae datos directamente a un DataFrame de Polars.
         
         Mas eficiente para procesamiento posterior.
         """
-        data = self.extract(query, params)
+        data = self.extract(query, params, table_name)
         return pl.DataFrame(data)
 
     def disconnect(self) -> None:
