@@ -1,7 +1,8 @@
 import yaml
+import os
 from pathlib import Path
+from dotenv import load_dotenv
 from config.logging_config import logger
-from config.config_loader import ConfigLoader
 from core.pipeline_manager import PipelineManager
 
 
@@ -16,6 +17,11 @@ def main():
     logger.info("=" * 50)
 
     try:
+        # Cargar variables de entorno
+        env_path = Path(__file__).parent.parent / ".env"
+        load_dotenv(env_path)
+        logger.info(f"Variables de entorno cargadas desde: {env_path}")
+
         # Cargar configuracion
         config_path = Path(__file__).parent.parent / "config" / "pipeline.yaml"
 

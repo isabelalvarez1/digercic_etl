@@ -1,3 +1,5 @@
+import os
+import re
 import concurrent.futures
 from typing import Any, Dict, List
 from datetime import datetime
@@ -16,6 +18,20 @@ class PipelineManager:
         self.config = config
         self.results = {}
 
+    def _resolve_env_vars(self, config: Any) -> Any:
+        """Resuelve variables de entorno ${VAR} en la configuracion."""
+        if isinstance(config, str):
+            pattern = r'\$\{(\w+)\}'
+            def replace_var(match):
+                var_name = match.group(1)
+                return os.getenv(var_name, match.group(0))
+            return re.sub(pattern, replace_var, config)
+        elif isinstance(config, dict):
+            return {k: self._resolve_env_vars(v) for k, v in config.items()}
+        elif isinstance(config, list):
+            return [self._resolve_env_vars(item) for item in config]
+        return config
+
     def run(self) -> Dict[str, Any]:
         """
         Ejecuta el pipeline completo definido en la configuracion.
@@ -30,6 +46,9 @@ class PipelineManager:
         start_time = datetime.now()
 
         try:
+            # Resolver variables de entorno en toda la configuracion
+            self.config = self._resolve_env_vars(self.config)
+            
             # Obtener configuraciones de extraccion
             extractions = self.config.get("extractions", [])
             
@@ -50,7 +69,7 @@ class PipelineManager:
 
             # Ejecutar transformaciones si existen
             transformations = self.config.get("transformations", {})
-            if transformations:
+            if transformations and transformations.get("enabled", False):
                 all_data = self._run_transformations(all_data, transformations)
 
             # Ejecutar cargas

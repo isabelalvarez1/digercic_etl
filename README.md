@@ -1,32 +1,28 @@
 # ETL DIGERCIC - Arquitectura Multi-Fuente
 
-Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Server, archivos) y cargarlos en un Data Warehouse.
+Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Server, archivos) y cargarlos en un Data Warehouse, usando **Polars** para procesamiento de alto rendimiento.
 
 ## Arquitectura
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │         PIPELINE MANAGER (Orquestador)      │
-                    │     Coordina Extract → Transform → Load     │
-                    └───────────────────────┬─────────────────────┘
-                                            │
-        ┌───────────────┬───────────────┬───┴───┬───────────────┐
-        ▼               ▼               ▼       ▼               ▼
-   ┌─────────┐    ┌──────────┐    ┌─────────┐ ┌─────────┐  ┌─────────┐
-   │ Oracle  │    │PostgreSQL│    │SQL Server│ │  CSV    │  │ Excel   │
-   └────┬────┘    └────┬─────┘    └────┬────┘ └────┬────┘  └────┬────┘
-        │              │              │           │             │
-        └──────────────┴──────┬───────┴───────────┴─────────────┘
-                              ▼
-                    ┌─────────────────┐
-                    │   DATA LAKE     │
-                    │  (PostgreSQL)   │
-                    └────────┬────────┘
-                             ▼
-                    ┌─────────────────┐
-                    │ DATA WAREHOUSE  │
-                    │   (Futuro)      │
-                    └─────────────────┘
+┌─────────────────────────────────────────────────┐
+│            PIPELINE MANAGER (Orquestador)        │
+│      Coordina Extract → Transform → Load         │
+│        Soporta modo paralelo y secuencial        │
+└──────────────────────┬──────────────────────────┘
+                       │
+    ┌──────────┬───────┴───────┬──────────┐
+    ▼          ▼               ▼          ▼
+┌────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐
+│ Oracle │ │PostgreSQL│ │SQL Server│ │ Archivo│
+└───┬────┘ └────┬─────┘ └────┬─────┘ └───┬────┘
+    │           │            │           │
+    └───────────┴─────┬──────┴───────────┘
+                      ▼
+            ┌──────────────────┐
+            │  PostgreSQL      │
+            │ (local_stage)    │
+            └──────────────────┘
 ```
 
 ## Estructura del Proyecto
@@ -35,36 +31,29 @@ Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Se
 digercic_etl/
 ├── app/
 │   ├── core/                          # Nucleo de la arquitectura
-│   │   ├── __init__.py
-│   │   ├── factory.py                 # Factory Pattern
-│   │   ├── pipeline_manager.py        # Orquestador ETL
+│   │   ├── factory.py                 # Factory Pattern (ExtractorFactory/LoaderFactory)
+│   │   ├── pipeline_manager.py        # Orquestador ETL con resolucion de variables
 │   │   ├── extractors/                # Extractores por fuente
-│   │   │   ├── __init__.py
-│   │   │   ├── base_extractor.py      # Clase abstracta
-│   │   │   ├── oracle_extractor.py    # Oracle
-│   │   │   ├── postgres_extractor.py  # PostgreSQL
-│   │   │   ├── sqlserver_extractor.py # SQL Server
-│   │   │   └── file_extractor.py      # CSV, Excel, TXT, JSON
+│   │   │   ├── base_extractor.py      # Clase abstracta con patron template
+│   │   │   ├── oracle_extractor.py    # Oracle (oracledb, batch OFFSET/FETCH)
+│   │   │   ├── postgres_extractor.py  # PostgreSQL (psycopg)
+│   │   │   ├── sqlserver_extractor.py # SQL Server (pyodbc)
+│   │   │   └── file_extractor.py      # CSV, Excel, TXT, JSON (Polars)
 │   │   ├── loaders/                   # Loaders por destino
-│   │   │   ├── __init__.py
 │   │   │   ├── base_loader.py         # Clase abstracta
-│   │   │   ├── postgres_loader.py     # PostgreSQL
-│   │   │   ├── sqlserver_loader.py    # SQL Server
-│   │   │   └── file_loader.py         # CSV, Excel, JSON
-│   │   ├── transformers/              # Transformaciones
-│   │   │   └── __init__.py
-│   │   └── connections/               # Pool de conexiones
-│   │       └── __init__.py
+│   │   │   ├── postgres_loader.py     # PostgreSQL (Polars batch, column_mapping)
+│   │   │   ├── sqlserver_loader.py    # SQL Server (pyodbc)
+│   │   │   └── file_loader.py         # CSV, Excel, JSON (Polars)
+│   │   └── transformers/              # Transformaciones (futuro)
 │   ├── config/
-│   │   ├── __init__.py
-│   │   ├── config_loader.py           # Loader de YAML
+│   │   ├── config_loader.py           # Loader de YAML con get() dot-notation
 │   │   ├── logging_config.py          # Config de logging
-│   │   └── settings.py                # Variables de entorno
+│   │   └── settings.py                # Variables de entorno desde .env
 │   ├── main.py                        # Punto de entrada
 │   └── logs/
 ├── config/
-│   └── pipeline.yaml                  # Configuracion del pipeline
-├── .env                               # Credenciales (NO se sube)
+│   └── pipeline.yaml                  # Configuracion del pipeline (multi-tabla)
+├── .env                               # Credenciales (NO se sube a git)
 ├── .env.example                       # Plantilla
 ├── .gitignore
 ├── README.md
@@ -85,9 +74,16 @@ digercic_etl/
 
 ## Configuracion YAML
 
+El pipeline se configura mediante `config/pipeline.yaml` con soporte para multiples tablas:
+
 ```yaml
+pipeline:
+  name: "digercic_etl"
+  version: "3.0.0"
+  parallel: false
+
 extractions:
-  - name: oracle_data
+  - name: clientes_oracle
     source: oracle
     config:
       host: ${ORACLE_HOST}
@@ -95,18 +91,43 @@ extractions:
       service: ${ORACLE_SERVICE}
       user: ${ORACLE_USER}
       password: ${ORACLE_PASSWORD}
-    query: "SELECT * FROM tabla"
+      batch_size: 50000
+    query: "SELECT * FROM CLIENTES"
     params: {}
 
 loads:
-  - name: load_to_pg
-    source: oracle_data
+  - name: clientes_to_postgres
+    source: clientes_oracle
     target: postgresql
     config:
       host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
       database: ${POSTGRES_DATABASE}
-    table: "destino"
-    mode: upsert
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 5000
+      column_mapping:              # Mapeo Oracle → PostgreSQL
+        CAMPAA: campana_n
+    table: "clientes"
+    mode: insert
+```
+
+### Resolucion de Variables
+
+Las variables `${VAR}` en el YAML se resuelven automaticamente desde las variables de entorno (`.env`):
+
+```yaml
+host: ${ORACLE_HOST}  # → os.getenv("ORACLE_HOST")
+```
+
+### Column Mapping
+
+Para manejar diferencias de nombres de columnas entre origen y destino:
+
+```yaml
+column_mapping:
+        CAMPAA: campana        # Oracle (encoding normalizado) → PostgreSQL
+  NOMBRE_LARGO: nombre     # Otro mapeo
 ```
 
 ## Instalacion
@@ -138,19 +159,19 @@ python main.py
 ## Variables de Entorno
 
 ```env
-# Oracle
-ORACLE_HOST=10.91.254.20
+# Oracle (Docker - adb-free)
+ORACLE_HOST=localhost
 ORACLE_PORT=1521
-ORACLE_SERVICE=DBINTERO
-ORACLE_USER=MIN_DESARROLLO_HUMANO
-ORACLE_PASSWORD=xxxxxx
+ORACLE_SERVICE=myatp
+ORACLE_USER=CAPTACION
+ORACLE_PASSWORD=DianaDB#2026X
 
-# PostgreSQL
-POSTGRES_HOST=192.168.95.24
+# PostgreSQL (local)
+POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
-POSTGRES_DATABASE=datalake
+POSTGRES_DATABASE=local_stage
 POSTGRES_USER=postgres
-POSTGRES_PASSWORD=xxxxxx
+POSTGRES_PASSWORD=admin
 
 # SQL Server (opcional)
 SQLSERVER_HOST=
@@ -160,18 +181,20 @@ SQLSERVER_USER=
 SQLSERVER_PASSWORD=
 ```
 
+> **Nota**: Oracle corre en Docker (`adb-free`). Iniciar con: `docker start adb-free`
+
 ## Dependencias
 
 | Paquete | Uso |
 |---------|-----|
-| `oracledb` | Conexion Oracle |
-| `psycopg` | Conexion PostgreSQL |
+| `oracledb` | Conexion Oracle (driver lightweight) |
+| `psycopg[binary]` | Conexion PostgreSQL |
 | `pyodbc` | Conexion SQL Server |
-| `polars` | Manipulacion de datos |
-| `pyarrow` | Soporte Apache Arrow |
-| `pyyaml` | Configuracion |
+| `polars` | Manipulacion de datos de alto rendimiento |
+| `pyarrow` | Soporte Apache Arrow para Polars |
+| `pyyaml` | Configuracion YAML |
 | `python-dotenv` | Variables de entorno |
-| `structlog` | Logging estructurado |
+| `openpyxl` | Lectura de archivos Excel |
 
 ## Patron Factory
 
@@ -187,6 +210,21 @@ data = extractor.execute(query)
 # Crear loader
 loader = LoaderFactory.create("postgresql", config)
 loader.execute(data, "tabla_destino")
+```
+
+## Batch Processing
+
+Para tablas grandes (millones de registros), el ETL usa procesamiento por lotes:
+
+- **Oracle Extractor**: `batch_size=50000` (OFFSET/FETCH NEXT)
+- **PostgreSQL Loader**: `batch_size=5000` (insercion por lotes)
+- **File Extractor/Loader**: Polars para manejo eficiente de memoria
+
+Ejemplo de extraccion en lotes desde Oracle:
+```python
+# Genera queries como:
+# SELECT * FROM tabla OFFSET 0 ROWS FETCH NEXT 50000 ROWS ONLY
+# SELECT * FROM tabla OFFSET 50000 ROWS FETCH NEXT 50000 ROWS ONLY
 ```
 
 ## Escalabilidad
@@ -207,3 +245,10 @@ class MongoExtractor(BaseExtractor):
 # Registrar
 ExtractorFactory.register("mongodb", MongoExtractor)
 ```
+
+## Tablas Actuales
+
+| Tabla | Fuente | Destino | Registros |
+|-------|--------|---------|-----------|
+| `CLIENTES` | Oracle | PostgreSQL | 101 |
+| `CAPTACIONES` | Oracle | PostgreSQL | 5 |

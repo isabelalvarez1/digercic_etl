@@ -1,50 +1,20 @@
 # ============================
-# ETL DIGERCIC - Configuracion Multi-Fuente
+# ETL DIGERCIC - Oracle -> PostgreSQL
+# Multi-tabla con lotes usando Polars
 # ============================
 
 pipeline:
   name: "digercic_etl"
-  description: "Pipeline ETL Multi-Fuente"
-  version: "2.0.0"
-  parallel: true
-
-# ============================
-# FUENTES DE DATOS
-# ============================
-
-# Oracle - Base de datos principal
-oracle_main:
-  host: ${ORACLE_HOST}
-  port: ${ORACLE_PORT}
-  service: ${ORACLE_SERVICE}
-  user: ${ORACLE_USER}
-  password: ${ORACLE_PASSWORD}
-  min_connections: 2
-  max_connections: 10
-
-# PostgreSQL - Base de datos destino
-postgres_datalake:
-  host: ${POSTGRES_HOST}
-  port: ${POSTGRES_PORT}
-  database: ${POSTGRES_DATABASE}
-  user: ${POSTGRES_USER}
-  password: ${POSTGRES_PASSWORD}
-
-# SQL Server - Otra fuente
-sqlserver_erp:
-  host: ${SQLSERVER_HOST}
-  port: ${SQLSERVER_PORT}
-  database: ${SQLSERVER_DATABASE}
-  user: ${SQLSERVER_USER}
-  password: ${SQLSERVER_PASSWORD}
-  driver: "ODBC Driver 17 for SQL Server"
+  description: "Pipeline ETL Oracle a PostgreSQL"
+  version: "3.0.0"
+  parallel: false
 
 # ============================
 # EXTRACCIONES
 # ============================
 extractions:
-  # Fuente 1: Oracle
-  - name: cedulado_desarrollo_humano
+  # Tabla CLIENTES
+  - name: clientes_oracle
     source: oracle
     config:
       host: ${ORACLE_HOST}
@@ -52,49 +22,21 @@ extractions:
       service: ${ORACLE_SERVICE}
       user: ${ORACLE_USER}
       password: ${ORACLE_PASSWORD}
-    query: "SELECT * FROM INTEROPERABILIDAD.CEDULADO_MIN_DESARROLLO_HUMANO"
+      batch_size: 50000
+    query: "SELECT * FROM CLIENTES"
     params: {}
 
-  # Fuente 2: PostgreSQL
-  - name: datos_postgres
-    source: postgresql
+  # Tabla CAPTACIONES
+  - name: captaciones_oracle
+    source: oracle
     config:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      database: ${POSTGRES_DATABASE}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
-    query: "SELECT * FROM public.tabla_origen"
-    params: {}
-
-  # Fuente 3: CSV local
-  - name: datos_csv
-    source: csv
-    config:
-      file_path: "app/data/entrada.csv"
-    params:
-      encoding: utf-8
-      delimiter: ","
-
-  # Fuente 4: Excel
-  - name: datos_excel
-    source: excel
-    config:
-      file_path: "app/data/entrada.xlsx"
-    params:
-      sheet_name: 0
-
-  # Fuente 5: SQL Server
-  - name: datos_sqlserver
-    source: sqlserver
-    config:
-      host: ${SQLSERVER_HOST}
-      port: ${SQLSERVER_PORT}
-      database: ${SQLSERVER_DATABASE}
-      user: ${SQLSERVER_USER}
-      password: ${SQLSERVER_PASSWORD}
-      driver: "ODBC Driver 17 for SQL Server"
-    query: "SELECT * FROM dbo.tabla_origen"
+      host: ${ORACLE_HOST}
+      port: ${ORACLE_PORT}
+      service: ${ORACLE_SERVICE}
+      user: ${ORACLE_USER}
+      password: ${ORACLE_PASSWORD}
+      batch_size: 50000
+    query: "SELECT * FROM CAPTACIONES"
     params: {}
 
 # ============================
@@ -102,21 +44,14 @@ extractions:
 # ============================
 transformations:
   enabled: false
-  operations:
-    - name: limpiar_nulos
-      type: drop_nulls
-      sources:
-        - cedulado_desarrollo_humano
-      columns:
-        - id
 
 # ============================
 # CARGAS
 # ============================
 loads:
-  # Cargar datos de Oracle a PostgreSQL
-  - name: load_cedulado_to_pg
-    source: cedulado_desarrollo_humano
+  # Carga CLIENTES a PostgreSQL
+  - name: clientes_to_postgres
+    source: clientes_oracle
     target: postgresql
     config:
       host: ${POSTGRES_HOST}
@@ -124,35 +59,29 @@ loads:
       database: ${POSTGRES_DATABASE}
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
-    table: "cedulado_min_desarrollo_humano"
-    mode: upsert
-
-  # Cargar datos de CSV a PostgreSQL
-  - name: load_csv_to_pg
-    source: datos_csv
-    target: postgresql
-    config:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      database: ${POSTGRES_DATABASE}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
-    table: "datos_csv"
+      batch_size: 5000
+    table: "clientes"
     mode: insert
 
-  # Exportar todo a CSV
-  - name: export_to_csv
-    source: cedulado_desarrollo_humano
-    target: csv
+  # Carga CAPTACIONES a PostgreSQL
+  - name: captaciones_to_postgres
+    source: captaciones_oracle
+    target: postgresql
     config:
-      output_dir: "app/output"
-      format: csv
-    table: "cedulado_export"
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 5000
+      column_mapping:
+        CAMPAA: campana
+    table: "captaciones"
+    mode: insert
 
 # ============================
 # LOGGING
 # ============================
 logging:
   level: INFO
-  file: "app/logs/digercic_etl.log"
-  format: "%(asctime)s | %(levelname)s | %(message)s"
+  file: "logs/digercic_etl.log"

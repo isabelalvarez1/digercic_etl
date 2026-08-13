@@ -61,7 +61,7 @@ class BaseExtractor(ABC):
 
         try:
             self.connect()
-            data = extract(query, params)
+            data = self.extract(query, params)
             self._stats["rows_extracted"] = len(data)
             return data
 
