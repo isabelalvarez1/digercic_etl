@@ -3,7 +3,7 @@ import re
 import concurrent.futures
 from typing import Any, Dict, List
 from datetime import datetime
-from config.logging_config import logger
+from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
 
 
@@ -12,6 +12,7 @@ class PipelineManager:
     Orquestador de pipelines ETL.
     
     Ejecuta multiples fuentes de datos en paralelo o secuencialmente.
+    Genera logs separados por tabla con tiempos de respuesta.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -158,7 +159,7 @@ class PipelineManager:
         return data
 
     def _run_loads(self, data: Dict[str, List], loads: List[Dict]) -> Dict[str, int]:
-        """Ejecuta las cargas en los destinos."""
+        """Ejecuta las cargas en los destinos con logging detallado por tabla."""
         logger.info("Ejecutando cargas...")
         load_results = {}
 
@@ -170,24 +171,60 @@ class PipelineManager:
             table = load_config.get("table", "")
             mode = load_config.get("mode", "insert")
 
+            # Logger especifico para esta tabla
+            table_logger = setup_table_logger(table)
+
             if source_name not in data:
-                logger.warning(f"[{name}] Fuente '{source_name}' no encontrada")
+                table_logger.warning(f"[{name}] Fuente '{source_name}' no encontrada")
                 continue
 
             source_data = data[source_name]
 
             if not source_data:
-                logger.warning(f"[{name}] No hay datos para cargar")
+                table_logger.warning(f"[{name}] No hay datos para cargar")
                 load_results[name] = 0
                 continue
+
+            # Log de inicio de carga
+            load_start = datetime.now()
+            table_logger.info(f"{'='*50}")
+            table_logger.info(f"INICIO CARGA: {table}")
+            table_logger.info(f"Tabla destino: {table}")
+            table_logger.info(f"Modo: {mode}")
+            table_logger.info(f"Registros a cargar: {len(source_data)}")
+            table_logger.info(f"Fecha inicio: {load_start.strftime('%Y-%m-%d %H:%M:%S')}")
+            table_logger.info(f"{'-'*50}")
 
             try:
                 loader = LoaderFactory.create(target_type, target_config)
                 rows_loaded = loader.execute(source_data, table, mode)
+                
+                # Calcular tiempo de carga
+                load_end = datetime.now()
+                load_duration = (load_end - load_start).total_seconds()
+                
                 load_results[name] = rows_loaded
-                logger.info(f"[{name}] Cargadas {rows_loaded} filas en {table}")
+                
+                # Log de exito con tiempo
+                table_logger.info(f"{'-'*50}")
+                table_logger.info(f"ESTADO: EXITOSO")
+                table_logger.info(f"Registros cargados: {rows_loaded}")
+                table_logger.info(f"Fecha fin: {load_end.strftime('%Y-%m-%d %H:%M:%S')}")
+                table_logger.info(f"Tiempo de carga: {load_duration:.2f} segundos")
+                table_logger.info(f"{'='*50}")
+                
             except Exception as e:
-                logger.exception(f"[{name}] Error en carga: {e}")
+                # Log de error con tiempo
+                load_end = datetime.now()
+                load_duration = (load_end - load_start).total_seconds()
+                
+                table_logger.error(f"{'-'*50}")
+                table_logger.error(f"ESTADO: ERROR")
+                table_logger.error(f"Error: {str(e)}")
+                table_logger.error(f"Fecha fin: {load_end.strftime('%Y-%m-%d %H:%M:%S')}")
+                table_logger.error(f"Tiempo hasta error: {load_duration:.2f} segundos")
+                table_logger.error(f"{'='*50}")
+                
                 load_results[name] = 0
 
         return load_results
