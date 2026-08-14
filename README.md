@@ -1,6 +1,6 @@
 # ETL DIGERCIC - Arquitectura Multi-Fuente
 
-Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Server, archivos) y cargarlos en un Data Warehouse, usando **Polars** para procesamiento de alto rendimiento.
+Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL) y cargarlos en un Data Warehouse, usando **Polars** para procesamiento de alto rendimiento.
 
 ## Arquitectura
 
@@ -11,8 +11,8 @@ Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Se
 │        Soporta modo paralelo y secuencial        │
 └──────────────────────┬──────────────────────────┘
                        │
-    ┌──────────┬───────┴───────┬──────────┐
-    ▼          ▼               ▼          ▼
+     ┌──────────┬──────┴───────┬──────────┐
+     ▼          ▼              ▼          ▼
 ┌────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐
 │ Oracle │ │PostgreSQL│ │SQL Server│ │ Archivo│
 └───┬────┘ └────┬─────┘ └────┬─────┘ └───┬────┘
@@ -29,37 +29,27 @@ Pipeline ETL para extraer datos de multiples fuentes (Oracle, PostgreSQL, SQL Se
 
 ```
 digercic_etl/
+├── run.py                              # Punto de entrada
 ├── app/
-│   ├── __init__.py
-│   ├── main.py                        # Punto de entrada
-│   ├── core/                          # Nucleo de la arquitectura
+│   ├── core/                           # Nucleo de la arquitectura
 │   │   ├── __init__.py
-│   │   ├── factory.py                 # Factory Pattern (ExtractorFactory/LoaderFactory)
-│   │   ├── pipeline_manager.py        # Orquestador ETL con resolucion de variables
-│   │   ├── extractors/                # Extractores por fuente
+│   │   ├── factory.py                  # Factory Pattern (ExtractorFactory/LoaderFactory)
+│   │   ├── pipeline_manager.py         # Orquestador ETL con validacion de recursos
+│   │   ├── utils.py                    # Utilidades: deteccion de recursos del sistema
+│   │   ├── extractors/                 # Extractores por fuente
 │   │   │   ├── __init__.py
-│   │   │   ├── base_extractor.py      # Clase abstracta con patron template
-│   │   │   ├── oracle_extractor.py    # Oracle (oracledb, batch OFFSET/FETCH)
-│   │   │   ├── postgres_extractor.py  # PostgreSQL (psycopg)
-│   │   │   ├── sqlserver_extractor.py # SQL Server (pyodbc)
-│   │   │   └── file_extractor.py      # CSV, Excel, TXT, JSON (Polars)
-│   │   └── loaders/                   # Loaders por destino
+│   │   │   ├── base_extractor.py       # Clase abstracta con patron template
+│   │   │   └── oracle_extractor.py     # Oracle (oracledb, batch OFFSET/FETCH)
+│   │   └── loaders/                    # Loaders por destino
 │   │       ├── __init__.py
-│   │       ├── base_loader.py         # Clase abstracta
-│   │       ├── postgres_loader.py     # PostgreSQL (Polars batch, column_mapping)
-│   │       ├── sqlserver_loader.py    # SQL Server (pyodbc)
-│   │       └── file_loader.py         # CSV, Excel, JSON (Polars)
-│   ├── config/
-│   │   ├── __init__.py
-│   │   ├── config_loader.py           # Loader de YAML con get() dot-notation
-│   │   ├── logging_config.py          # Config de logging
-│   │   └── settings.py                # Variables de entorno desde .env
-│   └── logs/
-│       └── digercic_etl.log
+│   │       ├── base_loader.py          # Clase abstracta
+│   │       └── postgres_loader.py      # PostgreSQL (Polars batch, column_mapping)
+│   └── config/
+│       └── logging_config.py           # Config de logging con archivos por tabla
 ├── config/
-│   └── pipeline.yaml                  # Configuracion del pipeline (multi-tabla)
-├── .env                               # Credenciales (NO se sube a git)
-├── .env.example                       # Plantilla
+│   └── pipeline.yaml                   # Configuracion del pipeline (multi-tabla)
+├── .env                                # Credenciales (NO se sube a git)
+├── .env.example                        # Plantilla
 ├── .gitignore
 ├── README.md
 └── requirements.txt
@@ -70,12 +60,7 @@ digercic_etl/
 | Fuente | Tipo | Extractor | Loader |
 |--------|------|-----------|--------|
 | Oracle | Base de datos | `OracleExtractor` | - |
-| PostgreSQL | Base de datos | `PostgresExtractor` | `PostgresLoader` |
-| SQL Server | Base de datos | `SqlServerExtractor` | `SqlServerLoader` |
-| CSV | Archivo | `FileExtractor` | `FileLoader` |
-| Excel | Archivo | `FileExtractor` | - |
-| TXT | Archivo | `FileExtractor` | - |
-| JSON | Archivo | `FileExtractor` | `FileLoader` |
+| PostgreSQL | Base de datos | - | `PostgresLoader` |
 
 ## Configuracion YAML
 
@@ -111,6 +96,7 @@ loads:
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
+      truncate_before_load: true
       column_mapping:              # Mapeo Oracle → PostgreSQL
         CAMPAA: campana
     table: "clientes"
@@ -135,6 +121,14 @@ column_mapping:
   NOMBRE_LARGO: nombre     # Otro mapeo
 ```
 
+### Truncate Before Load
+
+Para truncar la tabla antes de insertar:
+
+```yaml
+truncate_before_load: true  # TRUNCATE TABLE antes de INSERT
+```
+
 ## Instalacion
 
 ```bash
@@ -157,8 +151,11 @@ copy .env.example .env
 ## Ejecucion
 
 ```bash
-cd app
-python main.py
+# Asegurarse que Oracle este corriendo (Docker)
+docker start adb-free
+
+# Ejecutar ETL
+python run.py
 ```
 
 ## Variables de Entorno
@@ -177,13 +174,6 @@ POSTGRES_PORT=5432
 POSTGRES_DATABASE=local_stage
 POSTGRES_USER=postgres
 POSTGRES_PASSWORD=admin
-
-# SQL Server (opcional)
-SQLSERVER_HOST=
-SQLSERVER_PORT=1433
-SQLSERVER_DATABASE=
-SQLSERVER_USER=
-SQLSERVER_PASSWORD=
 ```
 
 > **Nota**: Oracle corre en Docker (`adb-free`). Iniciar con: `docker start adb-free`
@@ -194,12 +184,12 @@ SQLSERVER_PASSWORD=
 |---------|-----|
 | `oracledb` | Conexion Oracle (driver lightweight) |
 | `psycopg[binary]` | Conexion PostgreSQL |
-| `pyodbc` | Conexion SQL Server |
 | `polars` | Manipulacion de datos de alto rendimiento |
 | `pyarrow` | Soporte Apache Arrow para Polars |
 | `pyyaml` | Configuracion YAML |
 | `python-dotenv` | Variables de entorno |
 | `openpyxl` | Lectura de archivos Excel |
+| `psutil` | Deteccion de recursos del sistema |
 
 ## Patron Factory
 
@@ -217,19 +207,159 @@ loader = LoaderFactory.create("postgresql", config)
 loader.execute(data, "tabla_destino")
 ```
 
-## Batch Processing
+## Batch Processing con Deteccion de Recursos
 
-Para tablas grandes (millones de registros), el ETL usa procesamiento por lotes:
+El ETL detecta automaticamente los recursos del sistema y calcula el tamano de lote optimo:
 
-- **Oracle Extractor**: `batch_size=50000` (OFFSET/FETCH NEXT)
-- **PostgreSQL Loader**: `batch_size=5000` (insercion por lotes)
-- **File Extractor/Loader**: Polars para manejo eficiente de memoria
+### Deteccion de Recursos
 
-Ejemplo de extraccion en lotes desde Oracle:
 ```python
-# Genera queries como:
-# SELECT * FROM tabla OFFSET 0 ROWS FETCH NEXT 50000 ROWS ONLY
-# SELECT * FROM tabla OFFSET 50000 ROWS FETCH NEXT 50000 ROWS ONLY
+from core.utils import get_system_resources
+
+resources = get_system_resources()
+# {
+#   "cpu_cores_logical": 8,
+#   "cpu_cores_physical": 4,
+#   "memory_total_gb": 15.79,
+#   "memory_available_gb": 2.03,
+#   "memory_percent_used": 87.2
+# }
+```
+
+### Calculo de Lotes Optimos
+
+```python
+from core.utils import calculate_optimal_batch_size
+
+batch_info = calculate_optimal_batch_size(total_rows=22000000, resources=resources)
+# {
+#   "total_rows": 22000000,
+#   "batch_size": 80000,
+#   "batch_count": 275,
+#   "rows_per_core": 2750000,
+#   "estimated_memory_mb": 7812.5
+# }
+```
+
+### Configuracion por Defecto
+
+| Componente | Batch Size | Descripcion |
+|------------|------------|-------------|
+| Oracle Extractor | 50000 | Registros por OFFSET/FETCH |
+| PostgreSQL Loader | 5000 | Registros por INSERT |
+| Optimizado | 80000 | Calculado segun CPU y memoria |
+
+### Ejemplo de Lotes
+
+```sql
+-- Oracle: Extraccion por lotes
+SELECT * FROM CLIENTES OFFSET 0 ROWS FETCH NEXT 80000 ROWS ONLY
+SELECT * FROM CLIENTES OFFSET 80000 ROWS FETCH NEXT 80000 ROWS ONLY
+SELECT * FROM CLIENTES OFFSET 160000 ROWS FETCH NEXT 80000 ROWS ONLY
+```
+
+## Logging por Tabla
+
+Cada tabla tiene su propio archivo de log con informacion detallada:
+
+```
+app/logs/
+├── clientes_2026-08-13.log      # Log especifico de clientes
+├── captaciones_2026-08-13.log   # Log especifico de captaciones
+└── digercic_etl.log             # Log general del pipeline
+```
+
+### Ejemplo de Log (Extraccion)
+
+```
+INICIO EXTRACCION: clientes
+Fecha inicio: 2026-08-13 16:39:04
+--------------------------------------------------
+Paso 1/6: Detectando recursos del sistema...
+  CPU Cores Logicales: 8
+  CPU Cores Fisicos: 4
+  Memoria Total: 15.79 GB
+  Memoria Disponible: 2.03 GB
+  Memoria Usada: 87.2%
+Paso 2/6: Preparando cursor...
+  Cursor creado
+Paso 3/6: Obteniendo estructura de la tabla...
+  Columnas encontradas: 7
+  Nombres: ID_CLIENTE, NOMBRES, APELLIDOS, EMAIL, TELEFONO, CIUDAD, FECHA_REGISTRO
+Paso 4/6: Contando registros totales...
+  Total registros: 101
+Paso 5/6: Calculando lotes optimos...
+  Batch Size Configurado: 50000
+  Batch Size Optimizado: 80000
+  Batch Size Final: 80000
+  Total Lotes: 1
+  Registros por Core: 12
+  Memoria Estimada por Lote: 7812.5 MB
+Paso 6/6: Extrayendo datos...
+--------------------------------------------------
+  CHUNK 1/1
+    Registros: 101
+    Chunk Size: 80000
+    Offset: 0
+    Tiempo: 0.14s
+    Progreso: 100.0%
+    Acumulado: 101/101
+--------------------------------------------------
+EXTRACCION COMPLETADA
+  Registros extraidos: 101
+  Chunks procesados: 1
+  Chunk Size utilizado: 80000
+  Tiempo total: 0.16 segundos
+  Velocidad: 644 registros/segundo
+  CPU Cores utilizados: 8
+  Memoria disponible: 2.03 GB
+Fecha fin: 2026-08-13 16:39:05
+==================================================
+```
+
+### Ejemplo de Log (Carga)
+
+```
+INICIO CARGA: clientes
+Fecha inicio: 2026-08-13 16:39:05
+--------------------------------------------------
+Paso 1/7: Detectando recursos del sistema...
+  CPU Cores Logicales: 8
+  Memoria Disponible: 2.01 GB
+Paso 2/7: Convirtiendo datos a DataFrame...
+  Registros: 101
+  Columnas originales: 7
+Paso 3/7: Normalizando nombres de columnas...
+  Columnas normalizadas: ['ID_CLIENTE', 'NOMBRES', 'APELLIDOS', 'EMAIL', 'TELEFONO', 'CIUDAD', 'FECHA_REGISTRO']
+Paso 4/7: Aplicando mapeo de columnas...
+  No hay mapeo configurado
+Paso 5/7: Calculando lotes optimos...
+  Batch Size Configurado: 5000
+  Batch Size Optimizado: 80000
+  Batch Size Final: 5000
+  Total Lotes: 1
+Paso 6/7: Preparando tabla destino...
+  Tabla clientes truncada
+Paso 7/7: Insertando datos por lotes...
+--------------------------------------------------
+  CHUNK 1/1
+    Registros: 101
+    Chunk Size: 5000
+    Offset: 0
+    Tiempo: 0.02s
+    Progreso: 100.0%
+    Acumulado: 101/101
+--------------------------------------------------
+CARGA COMPLETADA
+  Registros insertados: 101
+  Chunks procesados: 1
+  Chunk Size utilizado: 5000
+  Tiempo total: 0.03 segundos
+  Velocidad: 2914 registros/segundo
+  CPU Cores utilizados: 8
+  Memoria disponible: 2.01 GB
+Fecha fin: 2026-08-13 16:39:05
+==================================================
 ```
 
 ## Escalabilidad
