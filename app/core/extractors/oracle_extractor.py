@@ -48,6 +48,68 @@ class OracleExtractor(BaseExtractor):
             logger.exception(f"[OracleExtractor] Error de conexion: {e}")
             raise
 
+    def _get_columns(self, cursor, query: str, params: Dict) -> List[str]:
+        """
+        Obtiene los nombres de las columnas sin modificar el query original.
+        
+        Estrategias:
+        1. Ejecutar el query con FETCH FIRST 0 ROWS ONLY (no retorna datos)
+        2. Si falla, usar subquery con ROWNUM
+        3. Si falla, ejecutar query normal y obtener description
+        
+        Args:
+            cursor: Cursor de Oracle
+            query: Query original del usuario
+            params: Parametros del query
+            
+        Returns:
+            Lista de nombres de columnas
+        """
+        import re
+        
+        # Estrategia 1: FETCH FIRST 0 ROWS (Oracle 12c+)
+        try:
+            test_query = f"{query} FETCH FIRST 0 ROWS ONLY"
+            cursor.execute(test_query, params)
+            return [desc[0] for desc in cursor.description]
+        except Exception:
+            pass
+        
+        # Estrategia 2: Subquery con ROWNUM
+        try:
+            test_query = f"SELECT * FROM ({query}) WHERE ROWNUM <= 0"
+            cursor.execute(test_query, params)
+            return [desc[0] for desc in cursor.description]
+        except Exception:
+            pass
+        
+        # Estrategia 3: Ejecutar query normal (obtiene 1 fila)
+        try:
+            # Para queries con ORDER BY, LIMIT, etc.
+            test_query = query
+            cursor.execute(test_query, params)
+            columns = [desc[0] for desc in cursor.description]
+            # Consumir el resultado para evitar problemas
+            cursor.fetchall()
+            return columns
+        except Exception:
+            pass
+        
+        # Estrategia 4: Extraer de la tabla principal (fallback)
+        # Buscar "FROM tabla" y usar DESCRIBE
+        match = re.search(r'FROM\s+(\w+)', query, re.IGNORECASE)
+        if match:
+            table_name = match.group(1)
+            try:
+                cursor.execute(f"SELECT * FROM {table_name} WHERE ROWNUM <= 1")
+                columns = [desc[0] for desc in cursor.description]
+                cursor.fetchall()
+                return columns
+            except Exception:
+                pass
+        
+        raise Exception(f"No se pudieron obtener las columnas del query: {query[:100]}...")
+
     def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         """
         Extrae datos de Oracle usando Polars con lotes.
@@ -84,10 +146,9 @@ class OracleExtractor(BaseExtractor):
             cursor = self.connection.cursor()
             table_logger.info("  Cursor creado")
             
-            # Paso 3: Obtener columnas
+            # Paso 3: Obtener columnas (sin modificar el query original)
             table_logger.info("Paso 3/6: Obteniendo estructura de la tabla...")
-            cursor.execute(query + " WHERE ROWNUM <= 1")
-            columns = [desc[0] for desc in cursor.description]
+            columns = self._get_columns(cursor, query, params)
             table_logger.info(f"  Columnas encontradas: {len(columns)}")
             table_logger.info(f"  Nombres: {', '.join(columns)}")
             
