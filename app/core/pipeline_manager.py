@@ -3,7 +3,7 @@ import re
 import concurrent.futures
 from typing import Any, Dict, List
 from datetime import datetime
-from config.logging_config import logger, logger
+from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
 
 
