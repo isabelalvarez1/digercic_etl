@@ -1,5 +1,5 @@
 from typing import Any, Dict, Type
-from config.logging_config import logger
+from config.logging_config import logger, logger
 
 # Extractors
 from core.extractors.base_extractor import BaseExtractor

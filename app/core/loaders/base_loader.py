@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from config.logging_config import logger
+from config.logging_config import logger, setup_table_logger
 
 
 class BaseLoader(ABC):
@@ -60,6 +60,9 @@ class BaseLoader(ABC):
         logger.info(f"[{self.__class__.__name__}] Iniciando carga...")
         self._stats["start_time"] = datetime.now()
 
+        # Crear logger de tabla ANTES de connect() para capturar errores
+        table_logger = setup_table_logger(table)
+
         try:
             self.connect()
             rows_loaded = self.load(data, table, mode)
@@ -69,6 +72,7 @@ class BaseLoader(ABC):
         except Exception as e:
             self._stats["errors"].append(str(e))
             logger.exception(f"[{self.__class__.__name__}] Error en carga: {e}")
+            table_logger.error(f"  Error: {str(e)}")
             raise
 
         finally:
