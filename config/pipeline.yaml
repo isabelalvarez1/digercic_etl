@@ -61,6 +61,10 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       truncate_before_load: true
+      # NO se necesita column_mapping para CAMPAA
+      # La estandarizacion automatica convierte:
+      # CAMPA\ufffd\ufffdA → campana
+      # CAMPAÑA → campana
     table: "clientes"
     mode: insert
 
@@ -76,8 +80,10 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       truncate_before_load: true
-      column_mapping:
-        CAMPAA: campana
+      # column_mapping solo para renombrar explicitamente:
+      # column_mapping:
+      #   dni: cedula        # Ejemplo: renombrar DNI a cedula
+      #   nombre_completo: nombre  # Ejemplo: renombrar
     table: "captaciones"
     mode: insert
 

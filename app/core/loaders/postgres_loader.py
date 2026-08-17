@@ -18,33 +18,60 @@ class PostgresLoader(BaseLoader):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.batch_size = config.get("batch_size", 5000)
-        self.column_mapping = config.get("column_mapping", {})
-        self.normalize_columns = config.get("normalize_columns", True)
+        self.column_mapping = config.get("column_mapping", {})  # Solo para renombrar explicitamente
         self.truncate_before_load = config.get("truncate_before_load", False)
 
-    def _normalize_column_name(self, col: str) -> str:
+    def _standardize_column_name(self, col: str) -> str:
         """
-        Normaliza el nombre de columna:
-        - Convierte a mayusculas
-        - Elimina caracteres no ASCII (ñ, acentos, etc.)
-        """
-        replacements = {
-            'ñ': 'N', 'Ñ': 'N',
-            'á': 'A', 'Á': 'A',
-            'é': 'E', 'É': 'E',
-            'í': 'I', 'Í': 'I',
-            'ó': 'O', 'Ó': 'O',
-            'ú': 'U', 'Ú': 'U',
-            '\ufffd': '',
-        }
+        Estandariza el nombre de columna automaticamente.
         
-        result = col
+        Reglas:
+        1. Eliminar espacios al inicio y final
+        2. Eliminar caracteres de relleno (\ufffd)
+        3. Detectar patrones de encoding roto (ej: CAMP\ufffd\ufffdA → campana)
+        4. Reemplazar espacios multiples por guion bajo
+        5. Eliminar caracteres no ASCII (ñ, acentos, etc.)
+        6. Convertir a minusculas
+        
+        Ejemplos:
+            " ID_CLIENTE " → id_cliente
+            "NOMBRE COMPLETO" → nombre_completo
+            CAMPA\ufffd\ufffdA → campana
+            CAMPAÑA → campana
+            NOMBRE_CIUDAD → nombre_ciudad
+        """
+        import unicodedata
+        
+        # Paso 1: Eliminar espacios al inicio y final
+        result = col.strip()
+        
+        # Paso 2: Detectar patrones de encoding roto de Oracle
+        # Oracle a veces retorna "CAMPA\ufffd\ufffdA" cuando deberia ser "CAMPAÑA"
+        if '\ufffd' in result:
+            result = result.replace('\ufffd\ufffd', 'ñ')
+            result = result.replace('\ufffd', 'ñ')
+        
+        # Paso 3: Reemplazar acentos y ñ
+        replacements = {
+            'ñ': 'n', 'Ñ': 'n',
+            'á': 'a', 'Á': 'a',
+            'é': 'e', 'É': 'e',
+            'í': 'i', 'Í': 'i',
+            'ó': 'o', 'Ó': 'o',
+            'ú': 'u', 'Ú': 'u',
+        }
         for old, new in replacements.items():
             result = result.replace(old, new)
         
+        # Paso 4: Reemplazar espacios multiples por guion bajo
+        # "NOMBRE COMPLETO" → "nombre_completo"
+        result = re.sub(r'\s+', '_', result)
+        
+        # Paso 5: Eliminar caracteres no ASCII restantes
         result = re.sub(r'[^\x00-\x7F]', '', result)
         
-        return result.upper()
+        # Paso 6: Convertir a minusculas
+        return result.lower()
 
     def connect(self) -> None:
         """Establece conexion con PostgreSQL."""
@@ -106,27 +133,27 @@ class PostgresLoader(BaseLoader):
             df = pl.DataFrame(data)
             total_rows = df.height
             table_logger.info(f"  Registros: {total_rows}")
-            table_logger.info(f"  Columnas originales: {df.width}")
+            table_logger.info(f"  Columnas originales: {df.columns}")
             
-            # Paso 3: Normalizar columnas
-            table_logger.info("Paso 3/7: Normalizando nombres de columnas...")
-            if self.normalize_columns:
-                new_columns = {col: self._normalize_column_name(col) for col in df.columns}
-                df = df.rename(new_columns)
-                table_logger.info(f"  Columnas normalizadas: {list(new_columns.values())}")
+            # Paso 3: Estandarizar columnas (automatico)
+            table_logger.info("Paso 3/7: Estandarizando nombres de columnas...")
+            new_columns = {col: self._standardize_column_name(col) for col in df.columns}
+            df = df.rename(new_columns)
+            table_logger.info(f"  Columnas estandarizadas: {list(new_columns.values())}")
             
-            # Paso 4: Aplicar mapeo
-            table_logger.info("Paso 4/7: Aplicando mapeo de columnas...")
+            # Paso 4: Aplicar mapeo explicito (solo renombres intencionales)
+            table_logger.info("Paso 4/7: Aplicando renombres explicitos...")
             if self.column_mapping:
-                normalized_mapping = {self._normalize_column_name(k): v for k, v in self.column_mapping.items()}
+                # Convertir el mapeo a minusculas para comparar
+                normalized_mapping = {k.lower(): v for k, v in self.column_mapping.items()}
                 valid_mapping = {k: v for k, v in normalized_mapping.items() if k in df.columns}
                 if valid_mapping:
                     df = df.rename(valid_mapping)
-                    table_logger.info(f"  Mapeo aplicado: {valid_mapping}")
+                    table_logger.info(f"  Renombres aplicados: {valid_mapping}")
                 else:
-                    table_logger.info("  No hay mapeo para aplicar")
+                    table_logger.info("  No hay renombres para aplicar")
             else:
-                table_logger.info("  No hay mapeo configurado")
+                table_logger.info("  No hay renombres configurados")
             
             # Paso 5: Calcular lotes optimos
             table_logger.info("Paso 5/7: Calculando lotes optimos...")
