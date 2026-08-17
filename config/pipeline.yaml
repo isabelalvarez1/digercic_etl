@@ -81,9 +81,8 @@ loads:
       batch_size: 5000
       truncate_before_load: true
       # column_mapping solo para renombrar explicitamente:
-      # column_mapping:
-      #   fuente: Red_social
-      #   nombre_completo: nombre
+      column_mapping:
+        FUENTE: red_social
     table: "captaciones"
     mode: insert
 
