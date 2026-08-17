@@ -1,0 +1,51 @@
+# ============================
+# EJEMPLO: Configuracion con URL
+# ============================
+# Puedes usar URL o parametros individuales
+
+pipeline:
+  name: "ejemplo_url"
+  version: "1.0.0"
+  parallel: false
+
+extractions:
+  # OPCION 1: Usando URL
+  - name: clientes_oracle
+    source: oracle
+    config:
+      url: "${ORACLE_URL}"           # URL completa: host:port/service
+      user: ${ORACLE_USER}
+      password: ${ORACLE_PASSWORD}
+      ssl: false                     # true si usas SSL
+      batch_size: 50000
+    query: "SELECT * FROM CLIENTES"
+    params: {}
+
+  # OPCION 2: Usando parametros individuales (compatibilidad)
+  - name: captaciones_oracle
+    source: oracle
+    config:
+      host: ${ORACLE_HOST}           # Parametros individuales
+      port: ${ORACLE_PORT}
+      service: ${ORACLE_SERVICE}
+      user: ${ORACLE_USER}
+      password: ${ORACLE_PASSWORD}
+      ssl: false
+      batch_size: 50000
+    query: "SELECT * FROM CAPTACIONES"
+    params: {}
+
+loads:
+  - name: clientes_to_postgres
+    source: clientes_oracle
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 5000
+      truncate_before_load: true
+    table: "clientes"
+    mode: insert

@@ -1,0 +1,119 @@
+# ============================
+# ETL DIGERCIC - Multiples Conexiones Oracle
+# ============================
+
+pipeline:
+  name: "digercic_etl"
+  description: "Pipeline con multiples fuentes Oracle"
+  version: "4.0.0"
+  parallel: false
+
+# ============================
+# CONEXIONES ORACLE
+# ============================
+# Define todas tus conexiones aqui
+connections:
+  # Conexion 1: Produccion
+  oracle_produccion:
+    url: "${ORACLE_PROD_URL}"        # ej: prod-server:1521/proddb
+    user: ${ORACLE_PROD_USER}
+    password: ${ORACLE_PROD_PASSWORD}
+    ssl: true                        # SSL habilitado
+
+  # Conexion 2: Desarrollo
+  oracle_desarrollo:
+    host: ${ORACLE_DEV_HOST}
+    port: ${ORACLE_DEV_PORT}
+    service: ${ORACLE_DEV_SERVICE}
+    user: ${ORACLE_DEV_USER}
+    password: ${ORACLE_DEV_PASSWORD}
+    ssl: false
+
+  # Conexion 3: Base de datos local
+  oracle_local:
+    url: "localhost:1521/myatp"
+    user: "CAPTACION"
+    password: "DianaDB#2026X"
+    ssl: false
+
+# ============================
+# EXTRACCIONES
+# ============================
+extractions:
+  # Extraer de Produccion
+  - name: clientes_produccion
+    source: oracle
+    config:
+      connection_name: oracle_produccion  # ← Usa conexion pre-definida
+      batch_size: 100000
+    query: "SELECT * FROM CLIENTES"
+    params: {}
+
+  # Extraer de Desarrollo
+  - name: clientes_desarrollo
+    source: oracle
+    config:
+      connection_name: oracle_desarrollo  # ← Otra conexion
+      batch_size: 50000
+    query: "SELECT * FROM CLIENTES"
+    params: {}
+
+  # Extraer de Local (config inline)
+  - name: captaciones_local
+    source: oracle
+    config:
+      url: "localhost:1521/myatp"         # ← Config directa
+      user: "CAPTACION"
+      password: "DianaDB#2026X"
+      ssl: false
+      batch_size: 50000
+    query: "SELECT * FROM CAPTACIONES"
+    params: {}
+
+# ============================
+# CARGAS
+# ============================
+loads:
+  - name: clientes_produccion_to_postgres
+    source: clientes_produccion
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 10000
+      truncate_before_load: true
+    table: "clientes_produccion"
+    mode: insert
+
+  - name: clientes_desarrollo_to_postgres
+    source: clientes_desarrollo
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 10000
+      truncate_before_load: true
+    table: "clientes_desarrollo"
+    mode: insert
+
+  - name: captaciones_to_postgres
+    source: captaciones_local
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      batch_size: 10000
+      truncate_before_load: true
+      column_mapping:
+        CAMPAA: campana
+    table: "captaciones"
+    mode: insert

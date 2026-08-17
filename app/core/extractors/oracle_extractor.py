@@ -5,6 +5,7 @@ from datetime import datetime
 from config.logging_config import logger, setup_table_logger
 from core.extractors.base_extractor import BaseExtractor
 from core.utils import get_system_resources, calculate_optimal_batch_size
+from core.connection import get_connection_from_config
 
 
 class OracleExtractor(BaseExtractor):
@@ -12,6 +13,8 @@ class OracleExtractor(BaseExtractor):
     Extractor para Oracle con soporte para lotes usando Polars.
     
     Optimizado para tablas grandes (millones de registros).
+    
+    Soporta configuracion por URL o parametros individuales.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -19,30 +22,13 @@ class OracleExtractor(BaseExtractor):
         self.batch_size = config.get("batch_size", 50000)
 
     def connect(self) -> None:
-        """Establece conexion con Oracle."""
+        """Establece conexion con Oracle usando URL o parametros."""
         if self._connected:
             return
 
         try:
-            host = self.config.get("host")
-            port = self.config.get("port", 1521)
-            service = self.config.get("service")
-            user = self.config.get("user")
-            password = self.config.get("password")
-
-            dsn = f"{host}:{port}/{service}"
-
-            logger.info(f"[OracleExtractor] Conectando a {dsn}...")
-            logger.info(f"[OracleExtractor] Usuario: {user}")
-
-            self.connection = oracledb.connect(
-                user=user,
-                password=password,
-                dsn=dsn,
-            )
-
+            self.connection = get_connection_from_config(self.config)
             self._connected = True
-            logger.info(f"[OracleExtractor] Conexion exitosa a {host}:{port}/{service}")
 
         except Exception as e:
             logger.exception(f"[OracleExtractor] Error de conexion: {e}")

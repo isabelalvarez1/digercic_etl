@@ -3,8 +3,9 @@ import re
 import concurrent.futures
 from typing import Any, Dict, List
 from datetime import datetime
-from config.logging_config import logger, logger
+from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
+from core.connection import connection_manager
 
 
 class PipelineManager:
@@ -12,12 +13,38 @@ class PipelineManager:
     Orquestador de pipelines ETL.
     
     Ejecuta multiples fuentes de datos en paralelo o secuencialmente.
-    Genera logs separados por tabla con tiempos de respuesta.
+    Soporta multiples conexiones Oracle configurables.
     """
 
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         self.results = {}
+
+    def _register_connections(self) -> None:
+        """
+        Registra todas las conexiones Oracle definidas en la configuracion.
+        
+        Formato en YAML:
+            connections:
+              oracle_produccion:
+                url: "prod-server:1521/proddb"
+                user: ${ORACLE_USER}
+                password: ${ORACLE_PASSWORD}
+                ssl: true
+              
+              oracle_desarrollo:
+                host: localhost
+                port: 1521
+                service: myatp
+                user: ${ORACLE_USER}
+                password: ${ORACLE_PASSWORD}
+                ssl: false
+        """
+        connections_config = self.config.get("connections", {})
+        
+        for name, conn_config in connections_config.items():
+            connection_manager.register(name, conn_config)
+            logger.info(f"[PipelineManager] Conexion registrada: {name}")
 
     def _resolve_env_vars(self, config: Any) -> Any:
         """Resuelve variables de entorno ${VAR} en la configuracion."""
@@ -51,6 +78,11 @@ class PipelineManager:
         logger.info(f"[PipelineManager] Extracciones configuradas: {len(extractions)}")
         logger.info(f"[PipelineManager] Cargas configuradas: {len(loads)}")
         
+        # Listar conexiones configuradas
+        connections = self.config.get("connections", {})
+        if connections:
+            logger.info(f"[PipelineManager] Conexiones Oracle: {list(connections.keys())}")
+        
         # Validar que cada extraccion tenga su carga correspondiente
         extraction_names = [e.get("name") for e in extractions]
         for load in loads:
@@ -75,6 +107,9 @@ class PipelineManager:
         start_time = datetime.now()
 
         try:
+            # Registrar conexiones
+            self._register_connections()
+            
             # Validar recursos
             self._validate_resources()
             
@@ -127,6 +162,10 @@ class PipelineManager:
         except Exception as e:
             logger.exception(f"Error en pipeline: {e}")
             raise
+        
+        finally:
+            # Cerrar conexiones
+            connection_manager.disconnect()
 
     def _run_parallel(self, extractions: List[Dict]) -> Dict[str, List]:
         """Ejecuta extracciones en paralelo."""
@@ -190,7 +229,6 @@ class PipelineManager:
 
     def _extract_table_name(self, query: str) -> str:
         """Extrae el nombre de la tabla del query SQL."""
-        # Buscar patrones como "FROM tabla" o "INTO tabla"
         match = re.search(r'(?:FROM|INTO|UPDATE)\s+(\w+)', query, re.IGNORECASE)
         if match:
             return match.group(1).lower()
@@ -199,9 +237,6 @@ class PipelineManager:
     def _run_transformations(self, data: Dict[str, List], config: Dict) -> Dict[str, List]:
         """Ejecuta transformaciones sobre los datos."""
         logger.info("Ejecutando transformaciones...")
-        
-        # Por ahora retorna los datos sin transformar
-        # Se puede extender con transformers personalizados
         return data
 
     def _run_loads(self, data: Dict[str, List], loads: List[Dict]) -> Dict[str, int]:
