@@ -82,8 +82,8 @@ loads:
       truncate_before_load: true
       # column_mapping solo para renombrar explicitamente:
       # column_mapping:
-      #   dni: cedula        # Ejemplo: renombrar DNI a cedula
-      #   nombre_completo: nombre  # Ejemplo: renombrar
+      #   fuente: Red_social
+      #   nombre_completo: nombre
     table: "captaciones"
     mode: insert
 
