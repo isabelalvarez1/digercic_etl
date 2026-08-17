@@ -145,7 +145,11 @@ class PostgresLoader(BaseLoader):
             table_logger.info("Paso 4/7: Aplicando renombres explicitos...")
             if self.column_mapping:
                 # Convertir el mapeo a minusculas para comparar
-                normalized_mapping = {k.lower(): v for k, v in self.column_mapping.items()}
+                # Tambien estandarizar los valores (ej: Red_social -> red_social)
+                normalized_mapping = {
+                    self._standardize_column_name(k): self._standardize_column_name(v) 
+                    for k, v in self.column_mapping.items()
+                }
                 valid_mapping = {k: v for k, v in normalized_mapping.items() if k in df.columns}
                 if valid_mapping:
                     df = df.rename(valid_mapping)
