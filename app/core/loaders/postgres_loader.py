@@ -73,6 +73,47 @@ class PostgresLoader(BaseLoader):
         # Paso 6: Convertir a minusculas
         return result.lower()
 
+    def _create_table(self, cursor, table: str, df) -> None:
+        """
+        Crea tabla en PostgreSQL basada en la estructura del DataFrame.
+        Mapea tipos de Polars a tipos de PostgreSQL.
+        """
+        # Mapeo de tipos de Polars a PostgreSQL
+        type_mapping = {
+            'Int8': 'SMALLINT',
+            'Int16': 'SMALLINT',
+            'Int32': 'INTEGER',
+            'Int64': 'BIGINT',
+            'UInt8': 'SMALLINT',
+            'UInt16': 'INTEGER',
+            'UInt32': 'BIGINT',
+            'UInt64': 'BIGINT',
+            'Float32': 'REAL',
+            'Float64': 'DOUBLE PRECISION',
+            'Utf8': 'TEXT',
+            'String': 'TEXT',
+            'Boolean': 'BOOLEAN',
+            'Date': 'DATE',
+            'Datetime': 'TIMESTAMP',
+            'Time': 'TIME',
+            'Binary': 'BYTEA',
+            'Decimal': 'NUMERIC',
+            'Categorical': 'TEXT',
+            'Object': 'TEXT',
+        }
+        
+        # Construir columnas
+        columns = []
+        for col in df.columns:
+            col_type = str(df[col].dtype)
+            pg_type = type_mapping.get(col_type, 'TEXT')
+            columns.append(f"{col} {pg_type}")
+        
+        # Crear tabla
+        create_sql = f"CREATE TABLE {table} ({', '.join(columns)})"
+        cursor.execute(create_sql)
+        self.connection.commit()
+
     def connect(self) -> None:
         """Establece conexion con PostgreSQL."""
         if self._connected:
@@ -174,16 +215,32 @@ class PostgresLoader(BaseLoader):
             table_logger.info(f"  Registros por Core: {batch_info['rows_per_core']}")
             table_logger.info(f"  Memoria Estimada por Lote: {batch_info['estimated_memory_mb']} MB")
             
-            # Paso 6: Truncar tabla
+            # Paso 6: Preparar tabla destino
             table_logger.info("Paso 6/7: Preparando tabla destino...")
             cursor = self.connection.cursor()
             
-            if self.truncate_before_load:
+            # Verificar si la tabla existe
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = %s
+                )
+            """, (table,))
+            table_exists = cursor.fetchone()[0]
+            
+            if not table_exists:
+                # Crear tabla basada en la estructura del DataFrame
+                table_logger.info(f"  Tabla {table} no existe. Creando...")
+                self._create_table(cursor, table, df)
+                table_logger.info(f"  Tabla {table} creada exitosamente")
+            elif self.truncate_before_load:
+                # Truncar si existe y esta configurado
                 cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
                 self.connection.commit()
                 table_logger.info(f"  Tabla {table} truncada")
             else:
-                table_logger.info(f"  Modo: Insertar sin truncar")
+                table_logger.info(f"  Tabla {table} existe. Modo: Insertar sin truncar")
             
             # Paso 7: Insertar por lotes
             table_logger.info("Paso 7/7: Insertando datos por lotes...")
