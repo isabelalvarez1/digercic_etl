@@ -97,7 +97,7 @@ class OracleExtractor(BaseExtractor):
         
         # Estrategia 4: Extraer de la tabla principal (fallback)
         # Buscar "FROM tabla" y usar DESCRIBE
-        match = re.search(r'FROM\s+(\w+)', query, re.IGNORECASE)
+        match = re.search(r'FROM\s+(\w+\.\w+|\w+)', query, re.IGNORECASE)
         if match:
             table_name = match.group(1)
             try:
@@ -143,12 +143,14 @@ class OracleExtractor(BaseExtractor):
             
             # Paso 2: Preparar cursor
             table_logger.info("Paso 2/6: Preparando cursor...")
-            cursor = self.connection.cursor()
-            table_logger.info("  Cursor creado")
             
             # Paso 3: Obtener columnas (sin modificar el query original)
             table_logger.info("Paso 3/6: Obteniendo estructura de la tabla...")
-            columns = self._get_columns(cursor, query, params)
+            col_cursor = self.connection.cursor()
+            columns = self._get_columns(col_cursor, query, params)
+            col_cursor.close()
+            cursor = self.connection.cursor()
+            table_logger.info("  Cursor creado")
             table_logger.info(f"  Columnas encontradas: {len(columns)}")
             table_logger.info(f"  Nombres: {', '.join(columns)}")
             
@@ -219,6 +221,11 @@ class OracleExtractor(BaseExtractor):
             extraction_duration = (extraction_end - extraction_start).total_seconds()
             
             table_logger.info(f"{'-'*50}")
+            
+            # Alerta si COUNT != extraidos
+            if len(all_data) != total_rows:
+                table_logger.warning(f"  ADVERTENCIA: COUNT={total_rows} pero extraidos={len(all_data)}")
+            
             table_logger.info(f"EXTRACCION COMPLETADA")
             table_logger.info(f"  Registros extraidos: {len(all_data)}")
             table_logger.info(f"  Chunks procesados: {batch_num}")
