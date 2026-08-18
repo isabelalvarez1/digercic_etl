@@ -23,7 +23,7 @@ extractions:
       user: ${ORACLE_USER}
       password: ${ORACLE_PASSWORD}
       batch_size: 50000
-    query: "SELECT * FROM CLIENTES"
+    query: "SELECT * FROM CAPTACION.CLIENTES"
     params: {}
 
   # Tabla CAPTACIONES
@@ -36,7 +36,7 @@ extractions:
       user: ${ORACLE_USER}
       password: ${ORACLE_PASSWORD}
       batch_size: 50000
-    query: "SELECT * FROM CAPTACIONES"
+    query: "SELECT * FROM CAPTACION.CAPTACIONES"
     params: {}
 
 # ============================
@@ -81,8 +81,8 @@ loads:
       batch_size: 5000
       truncate_before_load: true
       # column_mapping solo para renombrar explicitamente:
-      column_mapping:
-       FUENTE: Red_social
+      #column_mapping:
+       #FUENTE: Red_social
     table: "captaciones"
     mode: insert
 
