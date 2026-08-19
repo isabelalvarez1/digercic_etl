@@ -17,6 +17,12 @@ class OracleExtractor(BaseExtractor):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.batch_size = config.get("batch_size", 50000)
+        self.instant_client_dir = config.get("instant_client_dir", "/opt/oracle/instantclient_21_12")
+        try:
+            oracledb.init_oracle_client(lib_dir=self.instant_client_dir)
+            logger.info(f"[OracleExtractor] Thick mode activado: {self.instant_client_dir}")
+        except Exception as e:
+            logger.warning(f"[OracleExtractor] Thick mode no disponible: {e}. Usando thin mode (requiere Oracle 12.1+)")
 
     def connect(self) -> None:
         """Establece conexion con Oracle."""
@@ -52,10 +58,11 @@ class OracleExtractor(BaseExtractor):
         """
         Obtiene los nombres de las columnas sin modificar el query original.
         
-        Estrategias:
-        1. Ejecutar el query con FETCH FIRST 0 ROWS ONLY (no retorna datos)
-        2. Si falla, usar subquery con ROWNUM
-        3. Si falla, ejecutar query normal y obtener description
+        Estrategias (ordenadas por compatibilidad):
+        1. Subquery con ROWNUM (Oracle 11g compatible)
+        2. FETCH FIRST 0 ROWS ONLY (Oracle 12c+)
+        3. Ejecutar query normal y obtener description
+        4. Extraer nombre de tabla y usar SELECT * WHERE ROWNUM <= 1
         
         Args:
             cursor: Cursor de Oracle
@@ -67,15 +74,21 @@ class OracleExtractor(BaseExtractor):
         """
         import re
         
-        # Estrategia 1: FETCH FIRST 0 ROWS (Oracle 12c+)
+        # Estrategia 1: Subquery con ROWNUM (Oracle 11g compatible)
+        try:
+            test_query = f"SELECT * FROM ({query}) WHERE ROWNUM <= 0"
+            cursor.execute(test_query, params)
+            return [desc[0] for desc in cursor.description]
+        except Exception:
+            pass
+        
+        # Estrategia 2: FETCH FIRST 0 ROWS (Oracle 12c+)
         try:
             test_query = f"{query} FETCH FIRST 0 ROWS ONLY"
             cursor.execute(test_query, params)
             return [desc[0] for desc in cursor.description]
         except Exception:
             pass
-        
-        # Estrategia 2: Subquery con ROWNUM
         try:
             test_query = f"SELECT * FROM ({query}) WHERE ROWNUM <= 0"
             cursor.execute(test_query, params)
@@ -114,7 +127,8 @@ class OracleExtractor(BaseExtractor):
         """
         Extrae datos de Oracle usando Polars con lotes.
         
-        Para tablas grandes, usa OFFSET/FETCH NEXT para procesar por lotes.
+        Para tablas grandes, usa ROWNUM para procesar por lotes.
+        Compatible con Oracle 11g y superiores.
         """
         if not self._connected:
             self.connect()
@@ -188,7 +202,10 @@ class OracleExtractor(BaseExtractor):
                 batch_num += 1
                 batch_start = datetime.now()
                 
-                batch_query = f"{query} OFFSET {offset} ROWS FETCH NEXT {final_batch_size} ROWS ONLY"
+                if offset == 0:
+                    batch_query = f"{query} WHERE ROWNUM <= {final_batch_size}"
+                else:
+                    batch_query = f"SELECT * FROM (SELECT t.*, ROWNUM rn FROM ({query}) t WHERE ROWNUM <= {offset + final_batch_size}) WHERE rn > {offset}"
                 cursor.execute(batch_query, params)
                 rows = cursor.fetchall()
                 

@@ -1,4 +1,5 @@
 import sys
+import argparse
 from pathlib import Path
 
 # Agregar carpeta app al path
@@ -11,14 +12,14 @@ from config.logging_config import logger
 from core.pipeline_manager import PipelineManager
 
 
-def main():
+def main(config_path=None):
     """
     Punto de entrada principal para el pipeline ETL.
     
     Ejecuta el pipeline configurado en config/pipeline.yaml
     """
     logger.info("=" * 50)
-    logger.info("ETL DIGERCIC - MULTI-FUENTE")
+    logger.info("ETL DIGERCIC - ORACLE 11g A POSTGRESQL")
     logger.info("=" * 50)
 
     try:
@@ -28,7 +29,8 @@ def main():
         logger.info(f"Variables de entorno cargadas desde: {env_path}")
 
         # Cargar configuracion
-        config_path = Path(__file__).parent / "config" / "pipeline.yaml"
+        if config_path is None:
+            config_path = str(Path(__file__).parent / "config" / "pipeline.yaml")
 
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
@@ -56,4 +58,11 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="ETL Oracle 11g a PostgreSQL")
+    parser.add_argument(
+        "--config", "-c",
+        default=None,
+        help="Ruta al archivo YAML de configuracion (default: config/pipeline.yaml)"
+    )
+    args = parser.parse_args()
+    main(args.config)

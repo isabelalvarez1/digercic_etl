@@ -1,20 +1,19 @@
 # ============================
-# ETL DIGERCIC - Oracle -> PostgreSQL
-# Multi-tabla con lotes usando Polars
+# ETL DIGERCIC - Oracle 11g -> PostgreSQL
+# Prueba con tabla CEDULADO
 # ============================
 
 pipeline:
   name: "digercic_etl"
-  description: "Pipeline ETL Oracle a PostgreSQL"
-  version: "3.0.0"
+  description: "Pipeline ETL Oracle 11g a PostgreSQL"
+  version: "3.1.0"
   parallel: false
 
 # ============================
 # EXTRACCIONES
 # ============================
 extractions:
-  # Tabla CLIENTES
-  - name: clientes_oracle
+  - name: cedulados_oracle
     source: oracle
     config:
       host: ${ORACLE_HOST}
@@ -23,20 +22,8 @@ extractions:
       user: ${ORACLE_USER}
       password: ${ORACLE_PASSWORD}
       batch_size: 50000
-    query: "SELECT * FROM CAPTACION.CLIENTES"
-    params: {}
-
-  # Tabla CAPTACIONES
-  - name: captaciones_oracle
-    source: oracle
-    config:
-      host: ${ORACLE_HOST}
-      port: ${ORACLE_PORT}
-      service: ${ORACLE_SERVICE}
-      user: ${ORACLE_USER}
-      password: ${ORACLE_PASSWORD}
-      batch_size: 50000
-    query: "SELECT * FROM CAPTACION.CAPTACIONES"
+      instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR}
+    query: "SELECT * FROM INTEROPERABILIDAD.CEDULADO_MIN_DESARROLLO_HUMANO"
     params: {}
 
 # ============================
@@ -49,9 +36,8 @@ transformations:
 # CARGAS
 # ============================
 loads:
-  # Carga CLIENTES a PostgreSQL
-  - name: clientes_to_postgres
-    source: clientes_oracle
+  - name: cedulados_to_postgres
+    source: cedulados_oracle
     target: postgresql
     config:
       host: ${POSTGRES_HOST}
@@ -61,29 +47,7 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       truncate_before_load: true
-      # NO se necesita column_mapping para CAMPAA
-      # La estandarizacion automatica convierte:
-      # CAMPA\ufffd\ufffdA → campana
-      # CAMPAÑA → campana
-    table: "clientes"
-    mode: insert
-
-  # Carga CAPTACIONES a PostgreSQL
-  - name: captaciones_to_postgres
-    source: captaciones_oracle
-    target: postgresql
-    config:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      database: ${POSTGRES_DATABASE}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
-      batch_size: 5000
-      truncate_before_load: true
-      # column_mapping solo para renombrar explicitamente:
-      #column_mapping:
-       #FUENTE: Red_social
-    table: "captaciones"
+    table: "cedulados_prueba"
     mode: insert
 
 # ============================
