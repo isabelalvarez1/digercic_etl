@@ -2,6 +2,18 @@ import sys
 import argparse
 from pathlib import Path
 
+# Verificar virtual environment
+venv_path = Path(__file__).parent / ".venv" / "Scripts" / "python.exe"
+if not venv_path.exists():
+    venv_path = Path(__file__).parent / ".venv" / "bin" / "python"
+
+in_venv = hasattr(sys, 'real_prefix') or (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix)
+if not in_venv:
+    print("ADVERTENCIA: No estas usando el virtual environment.")
+    print("Ejecuta: .venv\\Scripts\\activate  y luego  python run.py")
+    print("O usa:    .venv\\Scripts\\python.exe run.py")
+    print("")
+
 # Agregar carpeta app al path
 app_dir = Path(__file__).parent / "app"
 sys.path.insert(0, str(app_dir))

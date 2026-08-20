@@ -18,9 +18,38 @@ class OracleExtractor(BaseExtractor):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.batch_size = config.get("batch_size", 50000)
+        self.instant_client_dir = config.get("instant_client_dir")
+        self.oracle_version_major = None
+        self._thick_mode = False
+
+    def _init_thick_mode(self) -> None:
+        if not self.instant_client_dir:
+            return
+        try:
+            oracledb.init_oracle_client(lib_dir=self.instant_client_dir)
+            self._thick_mode = True
+            logger.info(f"[OracleExtractor] Thick mode activado: {self.instant_client_dir}")
+        except Exception as e:
+            logger.warning(f"[OracleExtractor] Thick mode no disponible: {e}")
+
+    def _detect_oracle_version(self) -> None:
+        try:
+            version_str = self.connection.version
+            major = int(version_str.split(".")[0])
+            self.oracle_version_major = major
+
+            if major < 12:
+                logger.info(f"[OracleExtractor] Oracle {major}g detectado - usando ROWNUM pagination")
+                if not self._thick_mode:
+                    self._init_thick_mode()
+            else:
+                logger.info(f"[OracleExtractor] Oracle {major}+ detectado - usando OFFSET/FETCH pagination")
+
+        except Exception as e:
+            logger.warning(f"[OracleExtractor] No se pudo detectar version: {e}. Asumiendo 12c+")
+            self.oracle_version_major = 19
 
     def connect(self) -> None:
-        """Establece conexion con Oracle."""
         if self._connected:
             return
 
@@ -52,33 +81,15 @@ class OracleExtractor(BaseExtractor):
             raise
 
     def _get_columns(self, cursor, query: str, params: Dict) -> List[str]:
-        """
-        Obtiene los nombres de las columnas sin modificar el query original.
-        
-        Estrategias:
-        1. Ejecutar el query con FETCH FIRST 0 ROWS ONLY (no retorna datos)
-        2. Si falla, usar subquery con ROWNUM
-        3. Si falla, ejecutar query normal y obtener description
-        
-        Args:
-            cursor: Cursor de Oracle
-            query: Query original del usuario
-            params: Parametros del query
-            
-        Returns:
-            Lista de nombres de columnas
-        """
         import re
-        
-        # Estrategia 1: FETCH FIRST 0 ROWS (Oracle 12c+)
+
         try:
             test_query = f"SELECT * FROM ({query}) WHERE ROWNUM <= 0"
             cursor.execute(test_query, params)
             return [desc[0] for desc in cursor.description]
         except Exception:
             pass
-        
-        # Estrategia 2: Subquery con ROWNUM
+
         try:
             test_query = f"{query} FETCH FIRST 0 ROWS ONLY"
             cursor.execute(test_query, params)
@@ -86,7 +97,6 @@ class OracleExtractor(BaseExtractor):
         except Exception:
             pass
 
-        # Estrategia 3: Ejecutar query normal (obtiene 1 fila)
         try:
             test_query = query
             cursor.execute(test_query, params)
@@ -96,7 +106,6 @@ class OracleExtractor(BaseExtractor):
         except Exception:
             pass
 
-        # Estrategia 4: Extraer de la tabla principal (fallback)
         match = re.search(r'FROM\s+(\w+\.\w+|\w+)', query, re.IGNORECASE)
         if match:
             table_name = match.group(1)
@@ -111,14 +120,7 @@ class OracleExtractor(BaseExtractor):
         raise Exception(f"No se pudieron obtener las columnas del query: {query[:100]}...")
 
     def _build_batch_query(self, query: str, offset: int, batch_size: int) -> str:
-        """
-        Construye el query de lote segun la version de Oracle.
-        
-        Oracle 11g: ROWNUM
-        Oracle 12c+: OFFSET/FETCH
-        """
         if self.oracle_version_major and self.oracle_version_major < 12:
-            # Oracle 11g: ROWNUM pagination
             if offset == 0:
                 return f"{query} WHERE ROWNUM <= {batch_size}"
             else:
@@ -129,15 +131,9 @@ class OracleExtractor(BaseExtractor):
                     f") WHERE rn > {offset}"
                 )
         else:
-            # Oracle 12c+: OFFSET/FETCH
             return f"{query} OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY"
 
     def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
-        """
-        Extrae datos de Oracle usando Polars con lotes.
-        
-        Para tablas grandes, usa OFFSET/FETCH NEXT para procesar por lotes.
-        """
         if not self._connected:
             self.connect()
 
@@ -204,8 +200,8 @@ class OracleExtractor(BaseExtractor):
             while offset < total_rows:
                 batch_num += 1
                 batch_start = datetime.now()
-                
-                batch_query = f"{query} OFFSET {offset} ROWS FETCH NEXT {final_batch_size} ROWS ONLY"
+
+                batch_query = self._build_batch_query(query, offset, final_batch_size)
                 cursor.execute(batch_query, params)
                 rows = cursor.fetchall()
 
@@ -267,12 +263,10 @@ class OracleExtractor(BaseExtractor):
             raise
 
     def extract_to_polars(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> pl.DataFrame:
-        """Extrae datos directamente a un DataFrame de Polars."""
         data = self.extract(query, params, table_name)
         return pl.DataFrame(data)
 
     def disconnect(self) -> None:
-        """Cierra la conexion."""
         if self.connection:
             self.connection.close()
             self._connected = False
