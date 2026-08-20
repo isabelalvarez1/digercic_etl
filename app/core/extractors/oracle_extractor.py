@@ -18,46 +18,6 @@ class OracleExtractor(BaseExtractor):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.batch_size = config.get("batch_size", 50000)
-        self.instant_client_dir = config.get("instant_client_dir")
-        self.oracle_version_major = None
-        self._thick_mode = False
-
-    def _init_thick_mode(self) -> None:
-        """
-        Inicializa thick mode para Oracle 11g.
-        Solo se ejecuta si instant_client_dir esta configurado.
-        """
-        if not self.instant_client_dir:
-            return
-
-        try:
-            oracledb.init_oracle_client(lib_dir=self.instant_client_dir)
-            self._thick_mode = True
-            logger.info(f"[OracleExtractor] Thick mode activado: {self.instant_client_dir}")
-        except Exception as e:
-            logger.warning(f"[OracleExtractor] Thick mode no disponible: {e}")
-
-    def _detect_oracle_version(self) -> None:
-        """
-        Detecta la version mayor de Oracle (11, 12, 19, 21, 23, etc.).
-        Usa conn.version que funciona en todas las versiones.
-        """
-        try:
-            # conn.version retorna "11.2.0.4.0" o "19.25.0.0.0" o "23.26.3.1.0"
-            version_str = self.connection.version
-            major = int(version_str.split(".")[0])
-            self.oracle_version_major = major
-
-            if major < 12:
-                logger.info(f"[OracleExtractor] Oracle {major}g detectado - usando ROWNUM pagination")
-                if not self._thick_mode:
-                    self._init_thick_mode()
-            else:
-                logger.info(f"[OracleExtractor] Oracle {major}+ detectado - usando OFFSET/FETCH pagination")
-
-        except Exception as e:
-            logger.warning(f"[OracleExtractor] No se pudo detectar version: {e}. Asumiendo 12c+")
-            self.oracle_version_major = 19
 
     def connect(self) -> None:
         """Establece conexion con Oracle."""
@@ -95,23 +55,30 @@ class OracleExtractor(BaseExtractor):
         """
         Obtiene los nombres de las columnas sin modificar el query original.
         
-        Estrategias (ordenadas por compatibilidad):
-        1. Subquery con ROWNUM (Oracle 11g compatible)
-        2. FETCH FIRST 0 ROWS ONLY (Oracle 12c+)
-        3. Ejecutar query normal y obtener description
-        4. Extraer nombre de tabla y usar SELECT * WHERE ROWNUM <= 1
+        Estrategias:
+        1. Ejecutar el query con FETCH FIRST 0 ROWS ONLY (no retorna datos)
+        2. Si falla, usar subquery con ROWNUM
+        3. Si falla, ejecutar query normal y obtener description
+        
+        Args:
+            cursor: Cursor de Oracle
+            query: Query original del usuario
+            params: Parametros del query
+            
+        Returns:
+            Lista de nombres de columnas
         """
         import re
-
-        # Estrategia 1: ROWNUM (funciona en todas las versiones)
+        
+        # Estrategia 1: FETCH FIRST 0 ROWS (Oracle 12c+)
         try:
             test_query = f"SELECT * FROM ({query}) WHERE ROWNUM <= 0"
             cursor.execute(test_query, params)
             return [desc[0] for desc in cursor.description]
         except Exception:
             pass
-
-        # Estrategia 2: FETCH FIRST 0 ROWS (Oracle 12c+)
+        
+        # Estrategia 2: Subquery con ROWNUM
         try:
             test_query = f"{query} FETCH FIRST 0 ROWS ONLY"
             cursor.execute(test_query, params)
@@ -169,7 +136,7 @@ class OracleExtractor(BaseExtractor):
         """
         Extrae datos de Oracle usando Polars con lotes.
         
-        Compatible con Oracle 11g (ROWNUM) y 12c+ (OFFSET/FETCH).
+        Para tablas grandes, usa OFFSET/FETCH NEXT para procesar por lotes.
         """
         if not self._connected:
             self.connect()
@@ -237,8 +204,8 @@ class OracleExtractor(BaseExtractor):
             while offset < total_rows:
                 batch_num += 1
                 batch_start = datetime.now()
-
-                batch_query = self._build_batch_query(query, offset, final_batch_size)
+                
+                batch_query = f"{query} OFFSET {offset} ROWS FETCH NEXT {final_batch_size} ROWS ONLY"
                 cursor.execute(batch_query, params)
                 rows = cursor.fetchall()
 

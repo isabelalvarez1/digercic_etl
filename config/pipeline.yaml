@@ -1,20 +1,20 @@
 # ============================
-# ETL DIGERCIC - Dos fuentes Oracle en paralelo
-# MSP (19c) y DIGERCIC (11g)
+# ETL DIGERCIC - Oracle -> PostgreSQL
+# Multi-tabla con lotes usando Polars
 # ============================
 
 pipeline:
   name: "digercic_etl"
-  description: "Pipeline ETL con dos fuentes Oracle simultaneas"
-  version: "4.0.0"
-  parallel: true
+  description: "Pipeline ETL Oracle a PostgreSQL"
+  version: "3.0.0"
+  parallel: false
 
 # ============================
 # EXTRACCIONES - Dos fuentes Oracle
 # ============================
 extractions:
-  # Fuente Oracle 1 - MSP (19c)
-  - name: cedulados_msp
+  # Tabla CLIENTES
+  - name: clientes_oracle
     source: oracle
     config:
       host: ${ORACLE_HOST_MSP}
@@ -23,21 +23,19 @@ extractions:
       user: ${ORACLE_USER_MSP}
       password: ${ORACLE_PASSWORD_MSP}
       batch_size: 50000
-      instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_MSP}
     query: "SELECT * FROM CAPTACION.CLIENTES"
     params: {}
 
-  # Fuente Oracle 2 - DIGERCIC (11g)
-  - name: cedulados_digercic
+  # Tabla CAPTACIONES
+  - name: captaciones_oracle
     source: oracle
     config:
-      host: ${ORACLE_HOST_DIGERCIC}
-      port: ${ORACLE_PORT_DIGERCIC}
-      service: ${ORACLE_SERVICE_DIGERCIC}
-      user: ${ORACLE_USER_DIGERCIC}
-      password: ${ORACLE_PASSWORD_DIGERCIC}
+      host: ${ORACLE_HOST}
+      port: ${ORACLE_PORT}
+      service: ${ORACLE_SERVICE}
+      user: ${ORACLE_USER}
+      password: ${ORACLE_PASSWORD}
       batch_size: 50000
-      instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_DIGERCIC}
     query: "SELECT * FROM CAPTACION.CAPTACIONES"
     params: {}
 
@@ -51,8 +49,9 @@ transformations:
 # CARGAS - Cada fuente a su tabla
 # ============================
 loads:
-  - name: cedulados_msp_to_postgres
-    source: cedulados_msp
+  # Carga CLIENTES a PostgreSQL
+  - name: clientes_to_postgres
+    source: clientes_oracle
     target: postgresql
     config:
       host: ${POSTGRES_HOST}
@@ -62,11 +61,16 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       truncate_before_load: true
-    table: "cedulados_prueba_msp"
+      # NO se necesita column_mapping para CAMPAA
+      # La estandarizacion automatica convierte:
+      # CAMPA\ufffd\ufffdA → campana
+      # CAMPAÑA → campana
+    table: "clientes"
     mode: insert
 
-  - name: cedulados_digercic_to_postgres
-    source: cedulados_digercic
+  # Carga CAPTACIONES a PostgreSQL
+  - name: captaciones_to_postgres
+    source: captaciones_oracle
     target: postgresql
     config:
       host: ${POSTGRES_HOST}
@@ -76,7 +80,10 @@ loads:
       password: ${POSTGRES_PASSWORD}
       batch_size: 5000
       truncate_before_load: true
-    table: "cedulados_prueba_digercic"
+      # column_mapping solo para renombrar explicitamente:
+      #column_mapping:
+       #FUENTE: Red_social
+    table: "captaciones"
     mode: insert
 
 # ============================
