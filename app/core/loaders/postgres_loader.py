@@ -316,6 +316,56 @@ class PostgresLoader(BaseLoader):
             logger.exception(f"[PostgresLoader] Error en carga: {e}")
             raise
 
+    def prepare_table(self, table: str, columns: List[str]) -> None:
+        """Prepara la tabla destino: crea si no existe, trunca si se configuro."""
+        if not self._connected:
+            self.connect()
+
+        cursor = self.connection.cursor()
+
+        cursor.execute("""
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = %s
+            )
+        """, (table,))
+        table_exists = cursor.fetchone()[0]
+
+        if not table_exists:
+            col_defs = ", ".join([f"{col} TEXT" for col in columns])
+            cursor.execute(f"CREATE TABLE {table} ({col_defs})")
+            self.connection.commit()
+            logger.info(f"[PostgresLoader] Tabla {table} creada")
+        elif self.truncate_before_load:
+            cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
+            self.connection.commit()
+            logger.info(f"[PostgresLoader] Tabla {table} truncada")
+
+        cursor.close()
+
+    def insert_batch(self, data: List[Dict], table: str) -> int:
+        """Inserta un batch de registros en la tabla."""
+        if not self._connected:
+            self.connect()
+
+        if not data:
+            return 0
+
+        cursor = self.connection.cursor()
+        columns = list(data[0].keys())
+        col_names = ", ".join(columns)
+        placeholders = ", ".join(["%s"] * len(columns))
+        query = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders})"
+
+        for row in data:
+            values = tuple(row[col] for col in columns)
+            cursor.execute(query, values)
+
+        self.connection.commit()
+        cursor.close()
+        return len(data)
+
     def load_from_polars(self, df: pl.DataFrame, table: str, mode: str = "insert") -> int:
         """
         Carga directamente desde un DataFrame de Polars.

@@ -262,6 +262,41 @@ class OracleExtractor(BaseExtractor):
             logger.exception(f"[OracleExtractor] Error en extraccion: {e}")
             raise
 
+    def get_count(self, query: str, params: Optional[Dict] = None) -> int:
+        """Obtiene el total de registros sin extraer datos."""
+        if not self._connected:
+            self.connect()
+        if params is None:
+            params = {}
+        cursor = self.connection.cursor()
+        count_query = f"SELECT COUNT(*) FROM ({query})"
+        cursor.execute(count_query, params)
+        total = cursor.fetchone()[0]
+        cursor.close()
+        return total
+
+    def get_columns(self, query: str, params: Optional[Dict] = None) -> List[str]:
+        """Obtiene los nombres de las columnas del query."""
+        if not self._connected:
+            self.connect()
+        if params is None:
+            params = {}
+        cursor = self.connection.cursor()
+        columns = self._get_columns(cursor, query, params)
+        cursor.close()
+        return columns
+
+    def extract_batch(self, query: str, offset: int, batch_size: int, columns: List[str], params: Optional[Dict] = None) -> List[Dict]:
+        """Extrae un solo batch de datos."""
+        if params is None:
+            params = {}
+        cursor = self.connection.cursor()
+        batch_query = self._build_batch_query(query, offset, batch_size)
+        cursor.execute(batch_query, params)
+        rows = cursor.fetchall()
+        cursor.close()
+        return [dict(zip(columns, row)) for row in rows]
+
     def extract_to_polars(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> pl.DataFrame:
         data = self.extract(query, params, table_name)
         return pl.DataFrame(data)

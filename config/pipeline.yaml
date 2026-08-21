@@ -1,19 +1,10 @@
-# ============================
-# ETL DIGERCIC - Dos fuentes Oracle en paralelo
-# MSP (19c) y DIGERCIC (11g)
-# ============================
-
 pipeline:
-  name: "digercic_etl"
-  description: "Pipeline ETL con dos fuentes Oracle simultaneas"
+  name: digercic_etl
+  description: Pipeline ETL con dos fuentes Oracle simultaneas
   version: "4.0.0"
   parallel: true
 
-# ============================
-# EXTRACCIONES - Dos fuentes Oracle
-# ============================
 extractions:
-  # Fuente Oracle 1 - MSP (19c)
   - name: cedulados_msp
     source: oracle
     config:
@@ -22,34 +13,27 @@ extractions:
       service: ${ORACLE_SERVICE_MSP}
       user: ${ORACLE_USER_MSP}
       password: ${ORACLE_PASSWORD_MSP}
-      batch_size: 50000
+      batch_size: "50000"
       instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_MSP}
-    query: "SELECT * FROM CAPTACION.CLIENTES"
+    query: SELECT * FROM HCUE_SEGNOMINAL.VM_CONTROLES_NINOS_GESTANTES
     params: {}
 
-  # Fuente Oracle 2 - DIGERCIC (11g)
-  - name: cedulados_digercic
-    source: oracle
-    config:
-      host: ${ORACLE_HOST_DIGERCIC}
-      port: ${ORACLE_PORT_DIGERCIC}
-      service: ${ORACLE_SERVICE_DIGERCIC}
-      user: ${ORACLE_USER_DIGERCIC}
-      password: ${ORACLE_PASSWORD_DIGERCIC}
-      batch_size: 50000
-      instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_DIGERCIC}
-    query: "SELECT * FROM CAPTACION.CAPTACIONES"
-    params: {}
+  # - name: cedulados_digercic
+  #   source: oracle
+  #   config:
+  #     host: ${ORACLE_HOST_DIGERCIC}
+  #     port: ${ORACLE_PORT_DIGERCIC}
+  #     service: ${ORACLE_SERVICE_DIGERCIC}
+  #     user: ${ORACLE_USER_DIGERCIC}
+  #     password: ${ORACLE_PASSWORD_DIGERCIC}
+  #     batch_size: "50000"
+  #     instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_DIGERCIC}
+  #   query: SELECT * FROM CAPTACION.CAPTACIONES
+  #   params: {}
 
-# ============================
-# TRANSFORMACIONES
-# ============================
 transformations:
   enabled: false
 
-# ============================
-# CARGAS - Cada fuente a su tabla
-# ============================
 loads:
   - name: cedulados_msp_to_postgres
     source: cedulados_msp
@@ -60,28 +44,25 @@ loads:
       database: ${POSTGRES_DATABASE}
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
-      batch_size: 5000
-      truncate_before_load: true
-    table: "cedulados_prueba_msp"
+      batch_size: "5000"
+      truncate_before_load: "true"
+    table: cedulados_prueba_msp
     mode: insert
 
-  - name: cedulados_digercic_to_postgres
-    source: cedulados_digercic
-    target: postgresql
-    config:
-      host: ${POSTGRES_HOST}
-      port: ${POSTGRES_PORT}
-      database: ${POSTGRES_DATABASE}
-      user: ${POSTGRES_USER}
-      password: ${POSTGRES_PASSWORD}
-      batch_size: 5000
-      truncate_before_load: true
-    table: "cedulados_prueba_digercic"
-    mode: insert
+  # - name: cedulados_digercic_to_postgres
+  #   source: cedulados_digercic
+  #   target: postgresql
+  #   config:
+  #     host: ${POSTGRES_HOST}
+  #     port: ${POSTGRES_PORT}
+  #     database: ${POSTGRES_DATABASE}
+  #     user: ${POSTGRES_USER}
+  #     password: ${POSTGRES_PASSWORD}
+  #     batch_size: "5000"
+  #     truncate_before_load: "true"
+  #   table: cedulados_prueba_digercic
+  #   mode: insert
 
-# ============================
-# LOGGING
-# ============================
 logging:
   level: INFO
-  file: "logs/digercic_etl.log"
+  file: logs/digercic_etl.log

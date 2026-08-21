@@ -5,6 +5,8 @@ from typing import Any, Dict, List
 from datetime import datetime
 from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
+from core.extractors.oracle_extractor import OracleExtractor
+from core.loaders.postgres_loader import PostgresLoader
 
 
 class PipelineManager:
@@ -82,44 +84,42 @@ class PipelineManager:
             logger.info("[PipelineManager] Resolviendo variables de entorno...")
             self.config = self._resolve_env_vars(self.config)
             
-            # Obtener configuraciones de extraccion
+            # Obtener configuraciones
             extractions = self.config.get("extractions", [])
+            loads = self.config.get("loads", [])
             
             if not extractions:
                 logger.warning("No hay extracciones configuradas")
                 return {}
 
-            # Ejecutar extracciones
-            all_data = {}
-            
-            # Verificar si hay dependencias
-            parallel_mode = self.config.get("parallel", True)
-            
-            if parallel_mode:
-                all_data = self._run_parallel(extractions)
+            # Verificar si hay streaming (Oracle + PostgreSQL en la misma extraccion)
+            if self._can_stream(extractions, loads):
+                logger.info("[PipelineManager] Modo STREAMING: Extract + Load por chunks")
+                result = self._run_streaming(extractions, loads)
             else:
-                all_data = self._run_sequential(extractions)
+                # Modo original: extraer todo, luego cargar
+                parallel_mode = self.config.get("parallel", True)
+                if parallel_mode:
+                    all_data = self._run_parallel(extractions)
+                else:
+                    all_data = self._run_sequential(extractions)
 
-            # Ejecutar transformaciones si existen
-            transformations = self.config.get("transformations", {})
-            if transformations and transformations.get("enabled", False):
-                all_data = self._run_transformations(all_data, transformations)
+                transformations = self.config.get("transformations", {})
+                if transformations and transformations.get("enabled", False):
+                    all_data = self._run_transformations(all_data, transformations)
 
-            # Ejecutar cargas
-            loads = self.config.get("loads", [])
-            load_results = self._run_loads(all_data, loads)
+                load_results = self._run_loads(all_data, loads)
 
-            elapsed = (datetime.now() - start_time).seconds
-
-            result = {
-                "status": "completed",
-                "elapsed_seconds": elapsed,
-                "extractions": {k: len(v) for k, v in all_data.items()},
-                "loads": load_results,
-            }
+                elapsed = (datetime.now() - start_time).seconds
+                result = {
+                    "status": "completed",
+                    "elapsed_seconds": elapsed,
+                    "extractions": {k: len(v) for k, v in all_data.items()},
+                    "loads": load_results,
+                }
 
             logger.info("=" * 50)
-            logger.info(f"PIPELINE COMPLETADO en {elapsed}s")
+            logger.info(f"PIPELINE COMPLETADO en {result.get('elapsed_seconds', 0)}s")
             logger.info("=" * 50)
 
             return result
@@ -127,6 +127,120 @@ class PipelineManager:
         except Exception as e:
             logger.exception(f"Error en pipeline: {e}")
             raise
+
+    def _can_stream(self, extractions: List[Dict], loads: List[Dict]) -> bool:
+        """Verifica si se puede usar modo streaming (Oracle->PostgreSQL)."""
+        if not loads:
+            return False
+        for ext in extractions:
+            if ext.get("source") == "oracle":
+                return True
+        return False
+
+    def _run_streaming(self, extractions: List[Dict], loads: List[Dict]) -> Dict[str, Any]:
+        """
+        Modo streaming: extrae de Oracle y carga a PostgreSQL chunk por chunk.
+        Reduce uso de memoria y tiempo total.
+        """
+        logger.info("=" * 50)
+        logger.info("MODO STREAMING: Extract + Load por chunks")
+        logger.info("=" * 50)
+
+        start_time = datetime.now()
+        extraction_results = {}
+        load_results = {}
+
+        for ext_config in extractions:
+            name = ext_config.get("name", "unnamed")
+            source_type = ext_config.get("source")
+            source_config = ext_config.get("config", {})
+            query = ext_config.get("query", "")
+            params = ext_config.get("params", {})
+
+            # Buscar load correspondiente
+            load_config = None
+            for lc in loads:
+                if lc.get("source") == name:
+                    load_config = lc
+                    break
+
+            if not load_config:
+                logger.warning(f"[{name}] No hay load configurado, usando modo normal")
+                continue
+
+            target_type = load_config.get("target")
+            target_config = load_config.get("config", {})
+            table = load_config.get("table", "")
+            batch_size = ext_config.get("config", {}).get("batch_size", 100000)
+
+            try:
+                # Crear extractor y loader
+                extractor = ExtractorFactory.create(source_type, source_config)
+                loader = LoaderFactory.create(target_type, target_config)
+
+                # Conectar ambos
+                extractor.connect()
+                loader.connect()
+
+                # Obtener columnas y total
+                columns = extractor.get_columns(query, params)
+                total_rows = extractor.get_count(query, params)
+                logger.info(f"[{name}] Total registros: {total_rows}")
+                logger.info(f"[{name}] Columnas: {len(columns)}")
+
+                # Preparar tabla en PostgreSQL
+                loader.prepare_table(table, columns)
+
+                # Extraer y cargar chunk por chunk
+                offset = 0
+                chunk_num = 0
+                total_loaded = 0
+                chunk_start = datetime.now()
+
+                while offset < total_rows:
+                    chunk_num += 1
+                    chunk_data = extractor.extract_batch(query, offset, batch_size, columns, params)
+
+                    if not chunk_data:
+                        break
+
+                    loaded = loader.insert_batch(chunk_data, table)
+                    total_loaded += loaded
+
+                    offset += batch_size
+                    chunk_end = datetime.now()
+                    chunk_duration = (chunk_end - chunk_start).total_seconds()
+                    chunk_start = chunk_end
+
+                    percent = (total_loaded / total_rows) * 100 if total_rows > 0 else 100
+                    remaining = total_rows - total_loaded
+                    eta_seconds = (remaining / (total_loaded / chunk_duration)) if total_loaded > 0 and chunk_duration > 0 else 0
+                    eta_min = int(eta_seconds / 60)
+
+                    logger.info(f"  CHUNK {chunk_num} | {loaded} registros | {chunk_duration:.1f}s | Total: {total_loaded}/{total_rows} ({percent:.1f}%) | ETA: {eta_min}min")
+
+                extraction_results[name] = total_loaded
+                load_results[name] = total_loaded
+
+                logger.info(f"[{name}] COMPLETADO: {total_loaded} registros en {(datetime.now() - start_time).seconds}s")
+
+                # Cerrar conexiones
+                extractor.disconnect()
+                loader.disconnect()
+
+            except Exception as e:
+                logger.exception(f"[{name}] Error en streaming: {e}")
+                extraction_results[name] = 0
+                load_results[name] = 0
+
+        elapsed = (datetime.now() - start_time).seconds
+
+        return {
+            "status": "completed",
+            "elapsed_seconds": elapsed,
+            "extractions": extraction_results,
+            "loads": load_results,
+        }
 
     def _run_parallel(self, extractions: List[Dict]) -> Dict[str, List]:
         """Ejecuta extracciones en paralelo."""
