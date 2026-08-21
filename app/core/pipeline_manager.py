@@ -171,7 +171,7 @@ class PipelineManager:
             target_type = load_config.get("target")
             target_config = load_config.get("config", {})
             table = load_config.get("table", "")
-            batch_size = ext_config.get("config", {}).get("batch_size", 100000)
+            batch_size = int(ext_config.get("config", {}).get("batch_size", 100000))
 
             try:
                 # Crear extractor y loader
