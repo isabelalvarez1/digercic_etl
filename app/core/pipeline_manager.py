@@ -7,6 +7,7 @@ from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
 from core.extractors.oracle_extractor import OracleExtractor
 from core.loaders.postgres_loader import PostgresLoader
+from core.resource_monitor import ResourceMonitor
 
 
 class PipelineManager:
@@ -140,7 +141,7 @@ class PipelineManager:
     def _run_streaming(self, extractions: List[Dict], loads: List[Dict]) -> Dict[str, Any]:
         """
         Modo streaming: extrae de Oracle y carga a PostgreSQL chunk por chunk.
-        Reduce uso de memoria y tiempo total.
+        Incluye resume automatico si falla y workers paralelos.
         """
         logger.info("=" * 50)
         logger.info("MODO STREAMING: Extract + Load por chunks")
@@ -157,7 +158,6 @@ class PipelineManager:
             query = ext_config.get("query", "")
             params = ext_config.get("params", {})
 
-            # Buscar load correspondiente
             load_config = None
             for lc in loads:
                 if lc.get("source") == name:
@@ -174,30 +174,39 @@ class PipelineManager:
             batch_size = int(ext_config.get("config", {}).get("batch_size", 100000))
 
             try:
-                # Crear extractor y loader
                 extractor = ExtractorFactory.create(source_type, source_config)
                 loader = LoaderFactory.create(target_type, target_config)
+                monitor = ResourceMonitor()
 
-                # Conectar ambos
                 extractor.connect()
                 loader.connect()
+                loader.create_control_table()
+                monitor.register_connection()
 
-                # Obtener columnas y total
                 columns = extractor.get_columns(query, params)
                 total_rows = extractor.get_count(query, params)
                 logger.info(f"[{name}] Total registros: {total_rows}")
                 logger.info(f"[{name}] Columnas: {len(columns)}")
 
-                # Preparar tabla en PostgreSQL
                 loader.prepare_table(table, columns)
 
-                # Extraer y cargar chunk por chunk
-                offset = 0
-                chunk_num = 0
-                total_loaded = 0
+                last_chunk = loader.get_last_chunk(name)
+                if last_chunk > 0:
+                    logger.info(f"[{name}] RESUME desde chunk {last_chunk + 1} (ultimo completado: {last_chunk})")
+                    start_offset = last_chunk * batch_size
+                    total_loaded = last_chunk * batch_size
+                else:
+                    logger.info(f"[{name}] Iniciando desde chunk 1")
+                    start_offset = 0
+                    total_loaded = 0
+
+                offset = start_offset
+                chunk_num = last_chunk
                 chunk_start = datetime.now()
 
                 while offset < total_rows:
+                    monitor.wait_for_resources(task_name=name)
+                    
                     chunk_num += 1
                     chunk_data = extractor.extract_batch(query, offset, batch_size, columns, params)
 
@@ -205,6 +214,7 @@ class PipelineManager:
                         break
 
                     loaded = loader.insert_batch(chunk_data, table)
+                    loader.save_chunk_status(name, table, chunk_num, loaded, "OK")
                     total_loaded += loaded
 
                     offset += batch_size
@@ -217,14 +227,15 @@ class PipelineManager:
                     eta_seconds = (remaining / (total_loaded / chunk_duration)) if total_loaded > 0 and chunk_duration > 0 else 0
                     eta_min = int(eta_seconds / 60)
 
-                    logger.info(f"  CHUNK {chunk_num} | {loaded} registros | {chunk_duration:.1f}s | Total: {total_loaded}/{total_rows} ({percent:.1f}%) | ETA: {eta_min}min")
+                    status = monitor.get_status()
+                    logger.info(f"  CHUNK {chunk_num} | {loaded} registros | {chunk_duration:.1f}s | Total: {total_loaded}/{total_rows} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
 
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
 
                 logger.info(f"[{name}] COMPLETADO: {total_loaded} registros en {(datetime.now() - start_time).seconds}s")
 
-                # Cerrar conexiones
+                monitor.unregister_connection()
                 extractor.disconnect()
                 loader.disconnect()
 

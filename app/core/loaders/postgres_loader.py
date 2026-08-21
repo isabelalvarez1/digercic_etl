@@ -344,14 +344,102 @@ class PostgresLoader(BaseLoader):
 
         cursor.close()
 
+    def create_control_table(self) -> None:
+        """Crea la tabla de control ETL si no existe."""
+        if not self._connected:
+            self.connect()
+
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS etl_control (
+                id SERIAL PRIMARY KEY,
+                extraction_name VARCHAR(100) NOT NULL,
+                table_name VARCHAR(100) NOT NULL,
+                chunk_number INT NOT NULL,
+                rows_loaded INT NOT NULL,
+                status VARCHAR(20) NOT NULL DEFAULT 'OK',
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(extraction_name, chunk_number)
+            )
+        """)
+        self.connection.commit()
+        cursor.close()
+        logger.info("[PostgresLoader] Tabla etl_control verificada/creada")
+
+    def get_last_chunk(self, extraction_name: str) -> int:
+        """Obtiene el ultimo chunk completado para una extraccion."""
+        if not self._connected:
+            self.connect()
+
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            SELECT COALESCE(MAX(chunk_number), 0)
+            FROM etl_control
+            WHERE extraction_name = %s AND status = 'OK'
+        """, (extraction_name,))
+        result = cursor.fetchone()[0]
+        cursor.close()
+        return result
+
+    def save_chunk_status(self, extraction_name: str, table_name: str, chunk_number: int, rows_loaded: int, status: str = "OK") -> None:
+        """Guarda el estado de un chunk en la tabla de control."""
+        if not self._connected:
+            self.connect()
+
+        cursor = self.connection.cursor()
+        cursor.execute("""
+            INSERT INTO etl_control (extraction_name, table_name, chunk_number, rows_loaded, status)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (extraction_name, chunk_number)
+            DO UPDATE SET rows_loaded = %s, status = %s, updated_at = NOW()
+        """, (extraction_name, table_name, chunk_number, rows_loaded, status, rows_loaded, status))
+        self.connection.commit()
+        cursor.close()
+
     def insert_batch(self, data: List[Dict], table: str) -> int:
-        """Inserta un batch de registros en la tabla."""
+        """Inserta un batch de registros usando COPY (rapido) o fallback a INSERT."""
         if not self._connected:
             self.connect()
 
         if not data:
             return 0
 
+        try:
+            return self._copy_batch(data, table)
+        except Exception as e:
+            logger.warning(f"[PostgresLoader] COPY fallo, usando INSERT: {e}")
+            return self._insert_batch_fallback(data, table)
+
+    def _copy_batch(self, data: List[Dict], table: str) -> int:
+        """Inserta usando COPY (10-50x mas rapido que INSERT)."""
+        import io
+        import csv
+
+        columns = list(data[0].keys())
+        col_names = ", ".join(columns)
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer, delimiter='\t')
+        for row in data:
+            values = [str(row[col]) if row[col] is not None else '\\N' for col in columns]
+            writer.writerow(values)
+        buffer.seek(0)
+
+        cursor = self.connection.cursor()
+        cursor.copy(
+            file=buffer,
+            table=table,
+            columns=columns,
+            sep='\t',
+            null='\\N'
+        )
+        self.connection.commit()
+        cursor.close()
+        return len(data)
+
+    def _insert_batch_fallback(self, data: List[Dict], table: str) -> int:
+        """Inserta usando INSERT individual (fallback si COPY falla)."""
         cursor = self.connection.cursor()
         columns = list(data[0].keys())
         col_names = ", ".join(columns)
