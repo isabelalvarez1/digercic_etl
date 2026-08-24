@@ -141,8 +141,11 @@ class PipelineManager:
     def _run_streaming(self, extractions: List[Dict], loads: List[Dict]) -> Dict[str, Any]:
         """
         Modo streaming: extrae de Oracle y carga a PostgreSQL chunk por chunk.
-        Incluye resume automatico si falla y workers paralelos.
+        Incluye resume automatico, batch dinamico y workers paralelos.
         """
+        import concurrent.futures
+        import threading
+        
         logger.info("=" * 50)
         logger.info("MODO STREAMING: Extract + Load por chunks")
         logger.info("=" * 50)
@@ -171,7 +174,6 @@ class PipelineManager:
             target_type = load_config.get("target")
             target_config = load_config.get("config", {})
             table = load_config.get("table", "")
-            batch_size = int(ext_config.get("config", {}).get("batch_size", 100000))
 
             try:
                 extractor = ExtractorFactory.create(source_type, source_config)
@@ -185,8 +187,21 @@ class PipelineManager:
 
                 columns = extractor.get_columns(query, params)
                 total_rows = extractor.get_count(query, params)
+                num_columns = len(columns)
+                
                 logger.info(f"[{name}] Total registros: {total_rows}")
-                logger.info(f"[{name}] Columnas: {len(columns)}")
+                logger.info(f"[{name}] Columnas: {num_columns}")
+
+                # Calcular batch_size dinamico
+                from app.core.utils import get_system_resources, calculate_optimal_batch_size
+                resources = get_system_resources()
+                batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
+                batch_size = batch_info["batch_size"]
+                
+                logger.info(f"[{name}] BATCH DINAMICO: {batch_size:,} registros/chunk")
+                logger.info(f"[{name}] Chunks estimados: {batch_info['batch_count']:,}")
+                logger.info(f"[{name}] Memoria estimada: {batch_info['estimated_memory_mb']:.1f} MB")
+                logger.info(f"[{name}] Tiempo estimado (COPY): {batch_info['estimated_time_copy_min']:.1f} min")
 
                 loader.prepare_table(table, columns)
 
@@ -200,24 +215,50 @@ class PipelineManager:
                     start_offset = 0
                     total_loaded = 0
 
-                offset = start_offset
+                # Workers paralelos: extraer siguiente chunk mientras se carga el actual
+                next_chunk_data = [None]  # Mutable para closure
+                next_chunk_lock = threading.Lock()
+                
+                def extract_next_chunk():
+                    """Extrae el siguiente chunk en background."""
+                    next_offset = offset_ref[0] + batch_size
+                    if next_offset < total_rows:
+                        data = extractor.extract_batch(query, next_offset, batch_size, columns, params)
+                        with next_chunk_lock:
+                            next_chunk_data[0] = data
+
+                offset_ref = [start_offset]
                 chunk_num = last_chunk
                 chunk_start = datetime.now()
-
-                while offset < total_rows:
+                
+                # Pre-extract primer chunk
+                chunk_data = extractor.extract_batch(query, start_offset, batch_size, columns, params)
+                
+                while offset_ref[0] < total_rows:
                     monitor.wait_for_resources(task_name=name)
                     
-                    chunk_num += 1
-                    chunk_data = extractor.extract_batch(query, offset, batch_size, columns, params)
-
                     if not chunk_data:
                         break
 
+                    # Lanzar extraccion del siguiente chunk en background
+                    extract_thread = threading.Thread(target=extract_next_chunk)
+                    extract_thread.start()
+
+                    # Cargar chunk actual (mientras se extrae el siguiente)
                     loaded = loader.insert_batch(chunk_data, table)
                     loader.save_chunk_status(name, table, chunk_num, loaded, "OK")
                     total_loaded += loaded
 
-                    offset += batch_size
+                    # Esperar que termine la extraccion del siguiente
+                    extract_thread.join()
+                    
+                    with next_chunk_lock:
+                        chunk_data = next_chunk_data[0]
+                        next_chunk_data[0] = None
+
+                    offset_ref[0] += batch_size
+                    chunk_num += 1
+                    
                     chunk_end = datetime.now()
                     chunk_duration = (chunk_end - chunk_start).total_seconds()
                     chunk_start = chunk_end
@@ -228,12 +269,12 @@ class PipelineManager:
                     eta_min = int(eta_seconds / 60)
 
                     status = monitor.get_status()
-                    logger.info(f"  CHUNK {chunk_num} | {loaded} registros | {chunk_duration:.1f}s | Total: {total_loaded}/{total_rows} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
+                    logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
 
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
 
-                logger.info(f"[{name}] COMPLETADO: {total_loaded} registros en {(datetime.now() - start_time).seconds}s")
+                logger.info(f"[{name}] COMPLETADO: {total_loaded:,} registros en {(datetime.now() - start_time).seconds}s")
 
                 monitor.unregister_connection()
                 extractor.disconnect()

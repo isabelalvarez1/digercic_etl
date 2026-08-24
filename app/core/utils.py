@@ -23,13 +23,16 @@ def get_system_resources() -> Dict[str, Any]:
     }
 
 
-def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any]) -> Dict[str, Any]:
+def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num_columns: int = 20) -> Dict[str, Any]:
     """
-    Calcula el tamaño de lote óptimo basado en los recursos del sistema.
+    Calcula el tamaño de lote óptimo basado en recursos del sistema y numero de columnas.
+    
+    Formula: batch_size = (RAM_disponible_GB * 1024 * 1024 * 1024 * 0.3) / (num_columnas * 100)
     
     Args:
         total_rows: Total de registros a procesar
         resources: Recursos del sistema
+        num_columns: Numero de columnas de la tabla
         
     Returns:
         Diccionario con información de lotes
@@ -37,23 +40,40 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any]) -> 
     cpu_cores = resources.get("cpu_cores_logical", 4)
     memory_available = resources.get("memory_available_gb", 4)
     
-    # Calcular batch size basado en memoria y CPU
-    # Regla: ~1MB por 1000 registros en memoria
-    memory_based_batch = int((memory_available * 1024 * 1000) / 2)  # Usar 50% de memoria disponible
+    # ~100 bytes por celda en memoria (promedio)
+    bytes_per_row = num_columns * 100
     
-    # Limitar por CPU cores
-    optimal_batch = min(memory_based_batch, cpu_cores * 10000)
+    # Usar 30% de RAM disponible para el batch (dejar buffer para Oracle + overhead)
+    memory_for_batch = memory_available * 1024 * 1024 * 1024 * 0.3
+    memory_based_batch = int(memory_for_batch / bytes_per_row)
     
-    # Asegurar que sea al menos 1000
-    optimal_batch = max(optimal_batch, 1000)
+    # Ajustar por CPU (mas cores = puede manejar batches mas grandes)
+    cpu_based_batch = cpu_cores * 50000
     
-    # Calcular número de lotes
+    # Tomar el menor entre memoria y CPU
+    optimal_batch = min(memory_based_batch, cpu_based_batch)
+    
+    # Limites实用
+    optimal_batch = max(optimal_batch, 10000)     # Minimo 10K
+    optimal_batch = min(optimal_batch, 500000)    # Maximo 500K
+    
+    # Redondear a multiplos de 10K para numeros limpios
+    optimal_batch = (optimal_batch // 10000) * 10000
+    
+    # Calcular numero de lotes
     batch_count = (total_rows + optimal_batch - 1) // optimal_batch
+    
+    # Estimar tiempo (asumiendo ~2000 registros/seg con INSERT, ~50K con COPY)
+    estimated_seconds_insert = total_rows / 2000
+    estimated_seconds_copy = total_rows / 50000
     
     return {
         "total_rows": total_rows,
         "batch_size": optimal_batch,
         "batch_count": batch_count,
-        "rows_per_core": total_rows // cpu_cores if cpu_cores > 0 else total_rows,
-        "estimated_memory_mb": round((optimal_batch * 100) / 1024, 2),  # Estimación
+        "num_columns": num_columns,
+        "bytes_per_row": bytes_per_row,
+        "estimated_memory_mb": round((optimal_batch * bytes_per_row) / (1024 * 1024), 2),
+        "estimated_time_insert_min": round(estimated_seconds_insert / 60, 1),
+        "estimated_time_copy_min": round(estimated_seconds_copy / 60, 1),
     }
