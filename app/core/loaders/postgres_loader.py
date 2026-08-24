@@ -364,6 +364,13 @@ class PostgresLoader(BaseLoader):
                 UNIQUE(extraction_name, chunk_number)
             )
         """)
+        # Agregar columna batch_size si falta (upgrade desde version anterior)
+        cursor.execute("""
+            DO $$ BEGIN
+                ALTER TABLE etl_control ADD COLUMN batch_size INT NOT NULL DEFAULT 50000;
+            EXCEPTION WHEN duplicate_column THEN NULL;
+            END $$;
+        """)
         self.connection.commit()
         cursor.close()
         logger.info("[PostgresLoader] Tabla etl_control verificada/creada")
