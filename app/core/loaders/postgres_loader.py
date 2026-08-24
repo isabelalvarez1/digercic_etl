@@ -413,26 +413,14 @@ class PostgresLoader(BaseLoader):
 
     def _copy_batch(self, data: List[Dict], table: str) -> int:
         """Inserta usando COPY (10-50x mas rapido que INSERT)."""
-        import io
-        import csv
-
         columns = list(data[0].keys())
-        col_names = ", ".join(columns)
-
-        buffer = io.StringIO()
-        writer = csv.writer(buffer, delimiter='\t')
-        for row in data:
-            values = [str(row[col]) if row[col] is not None else '\\N' for col in columns]
-            writer.writerow(values)
-        buffer.seek(0)
+        records = [tuple(row[col] for col in columns) for row in data]
 
         cursor = self.connection.cursor()
-        cursor.copy(
-            file=buffer,
-            table=table,
-            columns=columns,
-            sep='\t',
-            null='\\N'
+        cursor.copy_records_to_table(
+            table,
+            records=records,
+            columns=columns
         )
         self.connection.commit()
         cursor.close()
