@@ -414,14 +414,14 @@ class PostgresLoader(BaseLoader):
     def _copy_batch(self, data: List[Dict], table: str) -> int:
         """Inserta usando COPY (10-50x mas rapido que INSERT)."""
         columns = list(data[0].keys())
-        records = [tuple(row[col] for col in columns) for row in data]
+        col_names = ", ".join(columns)
 
         cursor = self.connection.cursor()
-        cursor.copy_records_to_table(
-            table,
-            records=records,
-            columns=columns
-        )
+        copy_sql = f"COPY {table} ({col_names}) FROM STDIN (FORMAT text)"
+        with cursor.copy(copy_sql) as copy:
+            for row in data:
+                values = tuple(row[col] for col in columns)
+                copy.write_row(values)
         self.connection.commit()
         cursor.close()
         return len(data)
