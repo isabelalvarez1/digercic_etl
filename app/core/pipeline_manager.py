@@ -185,12 +185,18 @@ class PipelineManager:
                 loader.create_control_table()
                 monitor.register_connection()
 
+                table_logger = setup_table_logger(table)
+                table_logger.info(f"{'='*50}")
+                table_logger.info(f"INICIO STREAMING: {name}")
+                table_logger.info(f"{'='*50}")
+
                 columns = extractor.get_columns(query, params)
                 total_rows = extractor.get_count(query, params)
                 num_columns = len(columns)
                 
-                logger.info(f"[{name}] Total registros: {total_rows}")
-                logger.info(f"[{name}] Columnas: {num_columns}")
+                table_logger.info(f"Total registros: {total_rows:,}")
+                table_logger.info(f"Columnas: {num_columns}")
+                table_logger.info(f"Tabla destino: {table}")
 
                 # Calcular batch_size dinamico
                 from app.core.utils import get_system_resources, calculate_optimal_batch_size
@@ -198,20 +204,23 @@ class PipelineManager:
                 batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
                 batch_size = batch_info["batch_size"]
                 
-                logger.info(f"[{name}] BATCH DINAMICO: {batch_size:,} registros/chunk")
-                logger.info(f"[{name}] Chunks estimados: {batch_info['batch_count']:,}")
-                logger.info(f"[{name}] Memoria estimada: {batch_info['estimated_memory_mb']:.1f} MB")
-                logger.info(f"[{name}] Tiempo estimado (COPY): {batch_info['estimated_time_copy_min']:.1f} min")
+                table_logger.info(f"BATCH DINAMICO: {batch_size:,} registros/chunk")
+                table_logger.info(f"Chunks estimados: {batch_info['batch_count']:,}")
+                table_logger.info(f"Memoria estimada: {batch_info['estimated_memory_mb']:.1f} MB")
+                table_logger.info(f"Tiempo estimado (COPY): {batch_info['estimated_time_copy_min']:.1f} min")
 
                 loader.prepare_table(table, columns)
 
-                last_chunk = loader.get_last_chunk(name)
+                last_chunk_info = loader.get_last_chunk(name)
+                last_chunk = last_chunk_info["chunk"]
+                last_batch_size = last_chunk_info["batch_size"]
+                
                 if last_chunk > 0:
-                    logger.info(f"[{name}] RESUME desde chunk {last_chunk + 1} (ultimo completado: {last_chunk})")
-                    start_offset = last_chunk * batch_size
-                    total_loaded = last_chunk * batch_size
+                    table_logger.info(f"RESUME desde chunk {last_chunk + 1} (ultimo completado: {last_chunk}, batch anterior: {last_batch_size:,})")
+                    start_offset = last_chunk * last_batch_size
+                    total_loaded = last_chunk * last_batch_size
                 else:
-                    logger.info(f"[{name}] Iniciando desde chunk 1")
+                    table_logger.info(f"Iniciando desde chunk 1")
                     start_offset = 0
                     total_loaded = 0
 
@@ -246,7 +255,7 @@ class PipelineManager:
 
                     # Cargar chunk actual (mientras se extrae el siguiente)
                     loaded = loader.insert_batch(chunk_data, table)
-                    loader.save_chunk_status(name, table, chunk_num, loaded, "OK")
+                    loader.save_chunk_status(name, table, chunk_num, loaded, batch_size, "OK")
                     total_loaded += loaded
 
                     # Esperar que termine la extraccion del siguiente
@@ -269,12 +278,14 @@ class PipelineManager:
                     eta_min = int(eta_seconds / 60)
 
                     status = monitor.get_status()
-                    logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
+                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
 
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
 
-                logger.info(f"[{name}] COMPLETADO: {total_loaded:,} registros en {(datetime.now() - start_time).seconds}s")
+                table_logger.info(f"{'='*50}")
+                table_logger.info(f"COMPLETADO: {total_loaded:,} registros en {(datetime.now() - start_time).seconds}s")
+                table_logger.info(f"{'='*50}")
 
                 monitor.unregister_connection()
                 extractor.disconnect()

@@ -357,6 +357,7 @@ class PostgresLoader(BaseLoader):
                 table_name VARCHAR(100) NOT NULL,
                 chunk_number INT NOT NULL,
                 rows_loaded INT NOT NULL,
+                batch_size INT NOT NULL DEFAULT 50000,
                 status VARCHAR(20) NOT NULL DEFAULT 'OK',
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW(),
@@ -367,33 +368,39 @@ class PostgresLoader(BaseLoader):
         cursor.close()
         logger.info("[PostgresLoader] Tabla etl_control verificada/creada")
 
-    def get_last_chunk(self, extraction_name: str) -> int:
-        """Obtiene el ultimo chunk completado para una extraccion."""
+    def get_last_chunk(self, extraction_name: str) -> dict:
+        """Obtiene el ultimo chunk completado y el batch_size usado."""
         if not self._connected:
             self.connect()
 
         cursor = self.connection.cursor()
         cursor.execute("""
-            SELECT COALESCE(MAX(chunk_number), 0)
+            SELECT COALESCE(MAX(chunk_number), 0), 
+                   COALESCE(
+                       (SELECT batch_size FROM etl_control 
+                        WHERE extraction_name = %s AND status = 'OK' 
+                        ORDER BY chunk_number DESC LIMIT 1), 
+                       50000
+                   )
             FROM etl_control
             WHERE extraction_name = %s AND status = 'OK'
-        """, (extraction_name,))
-        result = cursor.fetchone()[0]
+        """, (extraction_name, extraction_name))
+        result = cursor.fetchone()
         cursor.close()
-        return result
+        return {"chunk": result[0], "batch_size": result[1]}
 
-    def save_chunk_status(self, extraction_name: str, table_name: str, chunk_number: int, rows_loaded: int, status: str = "OK") -> None:
+    def save_chunk_status(self, extraction_name: str, table_name: str, chunk_number: int, rows_loaded: int, batch_size: int = 50000, status: str = "OK") -> None:
         """Guarda el estado de un chunk en la tabla de control."""
         if not self._connected:
             self.connect()
 
         cursor = self.connection.cursor()
         cursor.execute("""
-            INSERT INTO etl_control (extraction_name, table_name, chunk_number, rows_loaded, status)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO etl_control (extraction_name, table_name, chunk_number, rows_loaded, batch_size, status)
+            VALUES (%s, %s, %s, %s, %s, %s)
             ON CONFLICT (extraction_name, chunk_number)
-            DO UPDATE SET rows_loaded = %s, status = %s, updated_at = NOW()
-        """, (extraction_name, table_name, chunk_number, rows_loaded, status, rows_loaded, status))
+            DO UPDATE SET rows_loaded = %s, batch_size = %s, status = %s, updated_at = NOW()
+        """, (extraction_name, table_name, chunk_number, rows_loaded, batch_size, status, rows_loaded, batch_size, status))
         self.connection.commit()
         cursor.close()
 

@@ -16,8 +16,8 @@ def setup_table_logger(table_name: str) -> logging.Logger:
     Returns:
         Logger configurado con archivo propio
     """
-    # Crear carpeta logs si no existe (ruta relativa al archivo actual)
-    log_dir = Path(__file__).parent.parent / "logs"
+    # Crear carpeta logs si no existe (ruta relativa al proyecto raiz)
+    log_dir = Path(__file__).parent.parent.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     
     # Nombre del archivo con fecha
