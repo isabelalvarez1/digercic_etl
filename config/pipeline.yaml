@@ -68,7 +68,7 @@ loads:
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
       truncate_before_load: "true"
-    table: vm_atenciones_ninos_hcue
+    table: atenciones_ninos_hcue_pruebas
     mode: insert
 
   # - name: cedulados_digercic_to_postgres
