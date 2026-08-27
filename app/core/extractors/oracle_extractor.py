@@ -178,11 +178,13 @@ class OracleExtractor(BaseExtractor):
             table_logger.info(f"  Total registros: {total_rows}")
 
             table_logger.info("Paso 5/6: Calculando lotes optimos...")
-            batch_info = calculate_optimal_batch_size(total_rows, resources)
+            num_columns = len(columns)
+            batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
 
             final_batch_size = max(self.batch_size, batch_info["batch_size"])
             final_batch_count = (total_rows + final_batch_size - 1) // final_batch_size
 
+            table_logger.info(f"  Columnas: {num_columns}")
             table_logger.info(f"  Batch Size Configurado: {self.batch_size}")
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")

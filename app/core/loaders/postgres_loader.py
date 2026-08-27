@@ -202,12 +202,14 @@ class PostgresLoader(BaseLoader):
             
             # Paso 5: Calcular lotes optimos
             table_logger.info("Paso 5/7: Calculando lotes optimos...")
-            batch_info = calculate_optimal_batch_size(total_rows, resources)
+            num_columns = len(df.columns)
+            batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
             
             # Usar batch_size del config si es menor al calculado
             final_batch_size = min(self.batch_size, batch_info["batch_size"])
             final_batch_count = (total_rows + final_batch_size - 1) // final_batch_size
             
+            table_logger.info(f"  Columnas: {num_columns}")
             table_logger.info(f"  Batch Size Configurado: {self.batch_size}")
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")
