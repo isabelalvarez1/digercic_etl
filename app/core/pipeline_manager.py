@@ -208,44 +208,61 @@ class PipelineManager:
                 loader.prepare_table(table, columns)
 
                 table_logger.info(f"Iniciando desde chunk 1")
+                table_logger.info(f"Pre-fetch: 2 chunks adelantados")
 
-                next_chunk_data = [None]
-                next_chunk_lock = threading.Lock()
+                prefetch_queue = []
+                prefetch_lock = threading.Lock()
 
-                def extract_next_chunk(next_offset):
-                    if next_offset < total_rows:
-                        data = extractor.extract_batch(query, next_offset, batch_size, columns, params)
-                        with next_chunk_lock:
-                            next_chunk_data[0] = data
+                def extract_chunk_at(offset_val):
+                    if offset_val < total_rows:
+                        data = extractor.extract_batch(query, offset_val, batch_size, columns, params)
+                        with prefetch_lock:
+                            prefetch_queue.append((offset_val, data))
 
                 chunk_num = 0
                 total_loaded = 0
                 offset = 0
                 chunk_start = datetime.now()
 
-                chunk_data = extractor.extract_batch(query, offset, batch_size, columns, params)
+                # Pre-extract primeros 2 chunks
+                t1 = threading.Thread(target=extract_chunk_at, args=(0,))
+                t2 = threading.Thread(target=extract_chunk_at, args=(batch_size,))
+                t1.start()
+                t2.start()
+                t1.join()
+                t2.join()
 
                 while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
 
+                    # Obtener chunk de la cola
+                    with prefetch_lock:
+                        chunk_data = None
+                        for i, (off, data) in enumerate(prefetch_queue):
+                            if off == offset:
+                                chunk_data = data
+                                prefetch_queue.pop(i)
+                                break
+
                     if not chunk_data:
                         break
 
-                    next_offset = offset + batch_size
-                    extract_thread = threading.Thread(target=extract_next_chunk, args=(next_offset,))
-                    extract_thread.start()
+                    # Lanzar pre-fetch del siguiente chunk
+                    next_offset = offset + batch_size * 2
+                    if next_offset < total_rows:
+                        pf_thread = threading.Thread(target=extract_chunk_at, args=(next_offset,))
+                        pf_thread.start()
 
+                    # Cargar chunk actual
                     loaded = loader.insert_batch(chunk_data, table)
                     total_loaded += loaded
 
-                    extract_thread.join()
-
-                    with next_chunk_lock:
-                        chunk_data = next_chunk_data[0]
-                        next_chunk_data[0] = None
-
                     offset += batch_size
                     chunk_num += 1
+
+                    # Esperar pre-fetch si se lanzo
+                    if next_offset < total_rows:
+                        pf_thread.join()
 
                     chunk_end = datetime.now()
                     chunk_duration = (chunk_end - chunk_start).total_seconds()

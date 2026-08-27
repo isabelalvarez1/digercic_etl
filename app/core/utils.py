@@ -27,7 +27,7 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     """
     Calcula el tamaño de lote óptimo basado en recursos del sistema y numero de columnas.
     
-    Formula: batch_size = (RAM_disponible_GB * 1024 * 1024 * 1024 * 0.3) / (num_columnas * 100)
+    Formula: batch_size = (RAM_disponible_GB * 1024 * 1024 * 1024 * 0.5) / (num_columnas * 100)
     
     Args:
         total_rows: Total de registros a procesar
@@ -43,19 +43,19 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     # ~100 bytes por celda en memoria (promedio)
     bytes_per_row = num_columns * 100
     
-    # Usar 30% de RAM disponible para el batch (dejar buffer para Oracle + overhead)
-    memory_for_batch = memory_available * 1024 * 1024 * 1024 * 0.3
+    # Usar 50% de RAM disponible para el batch (dejar buffer para conexiones)
+    memory_for_batch = memory_available * 1024 * 1024 * 1024 * 0.5
     memory_based_batch = int(memory_for_batch / bytes_per_row)
     
     # Ajustar por CPU (mas cores = puede manejar batches mas grandes)
-    cpu_based_batch = cpu_cores * 50000
+    cpu_based_batch = cpu_cores * 100000
     
     # Tomar el menor entre memoria y CPU
     optimal_batch = min(memory_based_batch, cpu_based_batch)
     
     # Limites实用
     optimal_batch = max(optimal_batch, 10000)     # Minimo 10K
-    optimal_batch = min(optimal_batch, 500000)    # Maximo 500K
+    optimal_batch = min(optimal_batch, 1000000)   # Maximo 1M
     
     # Redondear a multiplos de 10K para numeros limpios
     optimal_batch = (optimal_batch // 10000) * 10000
