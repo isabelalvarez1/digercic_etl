@@ -24,9 +24,7 @@ dag = DAG(
 # ============================
 ETL_PATH = "/path/to/digercic_etl"
 PYTHON = f"{ETL_PATH}/.venv/bin/python"
-
-# Un solo comando que ejecuta ambas extracciones y cargas
-CMD_ETL_COMPLETO = f"cd {ETL_PATH} && {PYTHON} run.py --config config/pipeline.yaml"
+CMD_ETL = f"cd {ETL_PATH} && {PYTHON} run.py --config config/pipeline.yaml"
 
 # ============================
 # TASKS
@@ -34,37 +32,14 @@ CMD_ETL_COMPLETO = f"cd {ETL_PATH} && {PYTHON} run.py --config config/pipeline.y
 
 inicio = DummyOperator(task_id="inicio", dag=dag)
 
-# --- Cedulados MSP ---
-RC_101_sync = SSHOperator(
-    task_id="RC_101_sync",
+# ETL: extrae VM_CONTROLES_NINOS_GESTANTES y VM_ATENCIONES_NINOS_HCUE
+ETL_SYNC = SSHOperator(
+    task_id="ETL_SYNC",
     ssh_conn_id="ssh_server_24",
-    command=CMD_ETL_COMPLETO,
+    command=CMD_ETL,
     dag=dag,
 )
 
-RC_101_ratore = DummyOperator(task_id="RC_101_ratore", dag=dag)
-
-# --- MSP 212 ---
-MSP_212 = DummyOperator(task_id="MSP_212", dag=dag)
-MSP_212_sync = SSHOperator(
-    task_id="MSP_212_sync",
-    ssh_conn_id="ssh_server_24",
-    command=CMD_ETL_COMPLETO,
-    dag=dag,
-)
-MSP_212_ratore = DummyOperator(task_id="MSP_212_ratore", dag=dag)
-
-# --- MSP 213 ---
-MSP_213 = DummyOperator(task_id="MSP_213", dag=dag)
-MSP_213_sync = SSHOperator(
-    task_id="MSP_213_sync",
-    ssh_conn_id="ssh_server_24",
-    command=CMD_ETL_COMPLETO,
-    dag=dag,
-)
-MSP_213_ratore = DummyOperator(task_id="MSP_213_ratore", dag=dag)
-
-# --- Permisos y flujo posterior ---
 Permiso00 = DummyOperator(task_id="Permiso00", dag=dag)
 RC_102_precision = DummyOperator(task_id="RC_102_precision", dag=dag)
 REGISTRO_POBLACION = DummyOperator(task_id="REGISTRO_POBLACION", dag=dag)
@@ -85,12 +60,4 @@ fin = DummyOperator(task_id="fin", dag=dag)
 # SECUENCIA
 # ============================
 
-inicio >> [RC_101_sync, MSP_212]
-
-RC_101_sync >> RC_101_ratore
-
-MSP_212 >> MSP_212_sync >> MSP_212_ratore >> MSP_213 >> MSP_213_sync >> MSP_213_ratore
-
-[RC_101_ratore, MSP_213_ratore] >> Permiso00
-
-[Permiso00 >> RC_102_precision >> REGISTRO_POBLACION >> MSP_213_precision >> MSP_212_precision >> Permiso01 >> REGISTRO_PADRON >> padron_frontera >> PADRON_HISTORICO >> INTEGRACION >> Permiso02 >> REGISTRO_ALERTAS >> Permiso03 >> REGISTRO_INDIVIDUAL] >> fin
+inicio >> ETL_SYNC >> Permiso00 >> RC_102_precision >> REGISTRO_POBLACION >> MSP_213_precision >> MSP_212_precision >> Permiso01 >> REGISTRO_PADRON >> padron_frontera >> PADRON_HISTORICO >> INTEGRACION >> Permiso02 >> REGISTRO_ALERTAS >> Permiso03 >> REGISTRO_INDIVIDUAL >> fin
