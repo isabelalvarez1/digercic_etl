@@ -27,8 +27,13 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     """
     Calcula el tamaño de lote óptimo basado en recursos del sistema y numero de columnas.
     
-    Formula: batch_size = (RAM_disponible_GB * 1024 * 1024 * 1024 * 0.5) / (num_columnas * 100)
-    
+    Variables de entorno configurables:
+        BATCH_MEMORY_PERCENT: % de RAM disponible para batch (default: 0.5)
+        BATCH_CPU_MULTIPLIER: Multiplicador por CPU core (default: 100000)
+        BATCH_SIZE_MIN: Tamaño minimo de batch (default: 10000)
+        BATCH_SIZE_MAX: Tamaño maximo de batch (default: 1000000)
+        BATCH_BYTES_PER_CELL: Bytes estimados por celda (default: 100)
+        
     Args:
         total_rows: Total de registros a procesar
         resources: Recursos del sistema
@@ -40,22 +45,27 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     cpu_cores = resources.get("cpu_cores_logical")
     memory_available = resources.get("memory_available_gb")
     
-    # ~100 bytes por celda en memoria (promedio)
-    bytes_per_row = num_columns * 100
+    # Parametros configurables desde variables de entorno
+    memory_percent = float(os.getenv("BATCH_MEMORY_PERCENT", "0.5"))
+    cpu_multiplier = int(os.getenv("BATCH_CPU_MULTIPLIER", "100000"))
+    batch_min = int(os.getenv("BATCH_SIZE_MIN", "10000"))
+    batch_max = int(os.getenv("BATCH_SIZE_MAX", "1000000"))
+    bytes_per_cell = int(os.getenv("BATCH_BYTES_PER_CELL", "100"))
     
-    # Usar 50% de RAM disponible para el batch (dejar buffer para conexiones)
-    memory_for_batch = memory_available * 1024 * 1024 * 1024 * 0.5
+    # Calcular basado en memoria
+    bytes_per_row = num_columns * bytes_per_cell
+    memory_for_batch = memory_available * 1024 * 1024 * 1024 * memory_percent
     memory_based_batch = int(memory_for_batch / bytes_per_row)
     
-    # Ajustar por CPU (mas cores = puede manejar batches mas grandes)
-    cpu_based_batch = cpu_cores * 100000
+    # Calcular basado en CPU
+    cpu_based_batch = cpu_cores * cpu_multiplier
     
     # Tomar el menor entre memoria y CPU
     optimal_batch = min(memory_based_batch, cpu_based_batch)
     
-    # Limites实用
-    optimal_batch = max(optimal_batch, 10000)     # Minimo 10K
-    optimal_batch = min(optimal_batch, 1000000)   # Maximo 1M
+    # Aplicar limites
+    optimal_batch = max(optimal_batch, batch_min)
+    optimal_batch = min(optimal_batch, batch_max)
     
     # Redondear a multiplos de 10K para numeros limpios
     optimal_batch = (optimal_batch // 10000) * 10000
@@ -76,4 +86,11 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
         "estimated_memory_mb": round((optimal_batch * bytes_per_row) / (1024 * 1024), 2),
         "estimated_time_insert_min": round(estimated_seconds_insert / 60, 1),
         "estimated_time_copy_min": round(estimated_seconds_copy / 60, 1),
+        "config": {
+            "memory_percent": memory_percent,
+            "cpu_multiplier": cpu_multiplier,
+            "batch_min": batch_min,
+            "batch_max": batch_max,
+            "bytes_per_cell": bytes_per_cell,
+        }
     }

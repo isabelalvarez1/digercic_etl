@@ -204,6 +204,9 @@ class PipelineManager:
                 table_logger.info(f"Chunks estimados: {batch_info['batch_count']:,}")
                 table_logger.info(f"Memoria estimada: {batch_info['estimated_memory_mb']:.1f} MB")
                 table_logger.info(f"Tiempo estimado (COPY): {batch_info['estimated_time_copy_min']:.1f} min")
+                
+                config = batch_info.get("config", {})
+                table_logger.info(f"Config: RAM={config.get('memory_percent', 0.5)*100:.0f}% | CPU x{config.get('cpu_multiplier', 100000)} | Min={config.get('batch_min', 10000):,} | Max={config.get('batch_max', 1000000):,}")
 
                 loader.prepare_table(table, columns)
 
