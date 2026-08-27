@@ -195,23 +195,26 @@ class PipelineManager:
                 table_logger.info(f"Columnas: {num_columns}")
                 table_logger.info(f"Tabla destino: {table}")
 
-                from core.utils import get_system_resources, calculate_optimal_batch_size
-                resources = get_system_resources()
-                batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
-                batch_size = batch_info["batch_size"]
+                from core.utils import calculate_optimal_config
+                auto_config = calculate_optimal_config(total_rows, num_columns)
+                batch_size = auto_config["batch_size"]
+                threads_extract = auto_config["threads_extract"]
+                prefetch_chunks = auto_config["prefetch_chunks"]
                 
-                table_logger.info(f"BATCH DINAMICO: {batch_size:,} registros/chunk")
-                table_logger.info(f"Chunks estimados: {batch_info['batch_count']:,}")
-                table_logger.info(f"Memoria estimada: {batch_info['estimated_memory_mb']:.1f} MB")
-                table_logger.info(f"Tiempo estimado (COPY): {batch_info['estimated_time_copy_min']:.1f} min")
-                
-                config = batch_info.get("config", {})
-                table_logger.info(f"Config: RAM={config.get('memory_percent', 0.5)*100:.0f}% | CPU x{config.get('cpu_multiplier', 100000)} | Min={config.get('batch_min', 10000):,} | Max={config.get('batch_max', 1000000):,}")
+                table_logger.info(f"{'='*50}")
+                table_logger.info(f"CONFIGURACION AUTOMATICA DETECTADA:")
+                table_logger.info(f"  CPU: {auto_config['system']['cpu_cores']} cores | RAM: {auto_config['system']['memory_available_gb']}GB disponible")
+                table_logger.info(f"  Batch Size: {batch_size:,} registros/chunk")
+                table_logger.info(f"  Chunks estimados: {auto_config['batch_count']:,}")
+                table_logger.info(f"  Threads extraccion: {threads_extract}")
+                table_logger.info(f"  Pre-fetch chunks: {prefetch_chunks}")
+                table_logger.info(f"  Memoria estimada: {auto_config['estimated_memory_mb']:.1f} MB")
+                table_logger.info(f"  Tiempo estimado: {auto_config['estimated_time_copy_min']:.1f} min")
+                table_logger.info(f"{'='*50}")
 
                 loader.prepare_table(table, columns)
 
-                table_logger.info(f"Iniciando desde chunk 1")
-                table_logger.info(f"Pre-fetch: 2 chunks adelantados")
+                table_logger.info(f"Iniciando extraccion y carga...")
 
                 prefetch_queue = []
                 prefetch_lock = threading.Lock()
@@ -227,13 +230,14 @@ class PipelineManager:
                 offset = 0
                 chunk_start = datetime.now()
 
-                # Pre-extract primeros 2 chunks
-                t1 = threading.Thread(target=extract_chunk_at, args=(0,))
-                t2 = threading.Thread(target=extract_chunk_at, args=(batch_size,))
-                t1.start()
-                t2.start()
-                t1.join()
-                t2.join()
+                # Pre-extract primeros chunks segun configuracion
+                initial_threads = []
+                for i in range(prefetch_chunks):
+                    t = threading.Thread(target=extract_chunk_at, args=(offset + (i * batch_size),))
+                    initial_threads.append(t)
+                    t.start()
+                for t in initial_threads:
+                    t.join()
 
                 while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
@@ -250,11 +254,18 @@ class PipelineManager:
                     if not chunk_data:
                         break
 
-                    # Lanzar pre-fetch del siguiente chunk
-                    next_offset = offset + batch_size * 2
-                    if next_offset < total_rows:
-                        pf_thread = threading.Thread(target=extract_chunk_at, args=(next_offset,))
-                        pf_thread.start()
+                    # Lanzar pre-fetch de chunks faltantes
+                    pf_threads = []
+                    for i in range(prefetch_chunks):
+                        next_offset = offset + batch_size * (i + 1)
+                        if next_offset < total_rows:
+                            # Verificar si ya esta en la cola
+                            with prefetch_lock:
+                                already_queued = any(off == next_offset for off, _ in prefetch_queue)
+                            if not already_queued:
+                                pf_thread = threading.Thread(target=extract_chunk_at, args=(next_offset,))
+                                pf_threads.append(pf_thread)
+                                pf_thread.start()
 
                     # Cargar chunk actual
                     loaded = loader.insert_batch(chunk_data, table)
@@ -263,8 +274,8 @@ class PipelineManager:
                     offset += batch_size
                     chunk_num += 1
 
-                    # Esperar pre-fetch si se lanzo
-                    if next_offset < total_rows:
+                    # Esperar pre-fetch threads
+                    for pf_thread in pf_threads:
                         pf_thread.join()
 
                     chunk_end = datetime.now()
