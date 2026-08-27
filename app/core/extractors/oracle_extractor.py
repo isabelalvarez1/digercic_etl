@@ -17,7 +17,7 @@ class OracleExtractor(BaseExtractor):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.batch_size = config.get("batch_size", 50000)
+        self.batch_size = config.get("batch_size")  # None = automatico
         self.instant_client_dir = config.get("instant_client_dir")
         self.oracle_version_major = None
         self._thick_mode = False
@@ -181,11 +181,14 @@ class OracleExtractor(BaseExtractor):
             num_columns = len(columns)
             batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
 
-            final_batch_size = max(self.batch_size, batch_info["batch_size"])
+            if self.batch_size is not None:
+                final_batch_size = max(self.batch_size, batch_info["batch_size"])
+            else:
+                final_batch_size = batch_info["batch_size"]
             final_batch_count = (total_rows + final_batch_size - 1) // final_batch_size
 
             table_logger.info(f"  Columnas: {num_columns}")
-            table_logger.info(f"  Batch Size Configurado: {self.batch_size}")
+            table_logger.info(f"  Batch Size Configurado: {self.batch_size if self.batch_size else 'automatico'}")
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")
             table_logger.info(f"  Total Lotes: {final_batch_count}")

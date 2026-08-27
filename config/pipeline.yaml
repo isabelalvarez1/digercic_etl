@@ -13,7 +13,6 @@ extractions:
       service: ${ORACLE_SERVICE_MSP}
       user: ${ORACLE_USER_MSP}
       password: ${ORACLE_PASSWORD_MSP}
-      batch_size: "50000"
       instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_MSP}
     query: SELECT * FROM HCUE_SEGNOMINAL.VM_CONTROLES_NINOS_GESTANTES
     params: {}
@@ -26,7 +25,6 @@ extractions:
   #     service: ${ORACLE_SERVICE_DIGERCIC}
   #     user: ${ORACLE_USER_DIGERCIC}
   #     password: ${ORACLE_PASSWORD_DIGERCIC}
-  #     batch_size: "50000"
   #     instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_DIGERCIC}
   #   query: SELECT * FROM CAPTACION.CAPTACIONES
   #   params: {}
@@ -44,7 +42,6 @@ loads:
       database: ${POSTGRES_DATABASE}
       user: ${POSTGRES_USER}
       password: ${POSTGRES_PASSWORD}
-      batch_size: "5000"
       truncate_before_load: "true"
     table: cedulados_prueba_msp
     mode: insert
@@ -58,7 +55,6 @@ loads:
   #     database: ${POSTGRES_DATABASE}
   #     user: ${POSTGRES_USER}
   #     password: ${POSTGRES_PASSWORD}
-  #     batch_size: "5000"
   #     truncate_before_load: "true"
   #   table: cedulados_prueba_digercic
   #   mode: insert

@@ -23,7 +23,7 @@ def get_system_resources() -> Dict[str, Any]:
     }
 
 
-def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num_columns: int = 20) -> Dict[str, Any]:
+def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num_columns: int) -> Dict[str, Any]:
     """
     Calcula el tamaño de lote óptimo basado en recursos del sistema y numero de columnas.
     
@@ -32,13 +32,13 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     Args:
         total_rows: Total de registros a procesar
         resources: Recursos del sistema
-        num_columns: Numero de columnas de la tabla
+        num_columns: Numero de columnas de la tabla (requerido)
         
     Returns:
         Diccionario con información de lotes
     """
-    cpu_cores = resources.get("cpu_cores_logical", 4)
-    memory_available = resources.get("memory_available_gb", 4)
+    cpu_cores = resources.get("cpu_cores_logical")
+    memory_available = resources.get("memory_available_gb")
     
     # ~100 bytes por celda en memoria (promedio)
     bytes_per_row = num_columns * 100

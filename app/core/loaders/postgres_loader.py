@@ -17,7 +17,7 @@ class PostgresLoader(BaseLoader):
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
-        self.batch_size = config.get("batch_size", 5000)
+        self.batch_size = config.get("batch_size")  # None = automatico
         self.column_mapping = config.get("column_mapping", {})  # Solo para renombrar explicitamente
         self.truncate_before_load = config.get("truncate_before_load", False)
 
@@ -205,12 +205,14 @@ class PostgresLoader(BaseLoader):
             num_columns = len(df.columns)
             batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
             
-            # Usar batch_size del config si es menor al calculado
-            final_batch_size = min(self.batch_size, batch_info["batch_size"])
+            if self.batch_size is not None:
+                final_batch_size = min(self.batch_size, batch_info["batch_size"])
+            else:
+                final_batch_size = batch_info["batch_size"]
             final_batch_count = (total_rows + final_batch_size - 1) // final_batch_size
             
             table_logger.info(f"  Columnas: {num_columns}")
-            table_logger.info(f"  Batch Size Configurado: {self.batch_size}")
+            table_logger.info(f"  Batch Size Configurado: {self.batch_size if self.batch_size else 'automatico'}")
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")
             table_logger.info(f"  Total Lotes: {final_batch_count}")
