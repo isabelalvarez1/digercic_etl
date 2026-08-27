@@ -17,6 +17,18 @@ extractions:
     query: SELECT * FROM HCUE_SEGNOMINAL.VM_CONTROLES_NINOS_GESTANTES
     params: {}
 
+  - name: atenciones_ninos_hcue
+    source: oracle
+    config:
+      host: ${ORACLE_HOST_MSP}
+      port: ${ORACLE_PORT_MSP}
+      service: ${ORACLE_SERVICE_MSP}
+      user: ${ORACLE_USER_MSP}
+      password: ${ORACLE_PASSWORD_MSP}
+      instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_MSP}
+    query: SELECT * FROM HCUE_REPOSITORIO.VM_ATENCIONES_NINOS_HCUE
+    params: {}
+
   # - name: cedulados_digercic
   #   source: oracle
   #   config:
@@ -44,6 +56,19 @@ loads:
       password: ${POSTGRES_PASSWORD}
       truncate_before_load: "true"
     table: cedulados_prueba_msp
+    mode: insert
+
+  - name: atenciones_ninos_to_postgres
+    source: atenciones_ninos_hcue
+    target: postgresql
+    config:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      database: ${POSTGRES_DATABASE}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+      truncate_before_load: "true"
+    table: vm_atenciones_ninos_hcue
     mode: insert
 
   # - name: cedulados_digercic_to_postgres
