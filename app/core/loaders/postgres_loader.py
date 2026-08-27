@@ -212,7 +212,6 @@ class PostgresLoader(BaseLoader):
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")
             table_logger.info(f"  Total Lotes: {final_batch_count}")
-            table_logger.info(f"  Registros por Core: {batch_info['rows_per_core']}")
             table_logger.info(f"  Memoria Estimada por Lote: {batch_info['estimated_memory_mb']} MB")
             
             # Paso 6: Preparar tabla destino
@@ -342,73 +341,6 @@ class PostgresLoader(BaseLoader):
             self.connection.commit()
             logger.info(f"[PostgresLoader] Tabla {table} truncada")
 
-        cursor.close()
-
-    def create_control_table(self) -> None:
-        """Crea la tabla de control ETL si no existe."""
-        if not self._connected:
-            self.connect()
-
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS etl_control (
-                id SERIAL PRIMARY KEY,
-                extraction_name VARCHAR(100) NOT NULL,
-                table_name VARCHAR(100) NOT NULL,
-                chunk_number INT NOT NULL,
-                rows_loaded INT NOT NULL,
-                batch_size INT NOT NULL DEFAULT 50000,
-                status VARCHAR(20) NOT NULL DEFAULT 'OK',
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW(),
-                UNIQUE(extraction_name, chunk_number)
-            )
-        """)
-        # Agregar columna batch_size si falta (upgrade desde version anterior)
-        cursor.execute("""
-            DO $$ BEGIN
-                ALTER TABLE etl_control ADD COLUMN batch_size INT NOT NULL DEFAULT 50000;
-            EXCEPTION WHEN duplicate_column THEN NULL;
-            END $$;
-        """)
-        self.connection.commit()
-        cursor.close()
-        logger.info("[PostgresLoader] Tabla etl_control verificada/creada")
-
-    def get_last_chunk(self, extraction_name: str) -> dict:
-        """Obtiene el ultimo chunk completado y el batch_size usado."""
-        if not self._connected:
-            self.connect()
-
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            SELECT COALESCE(MAX(chunk_number), 0), 
-                   COALESCE(
-                       (SELECT batch_size FROM etl_control 
-                        WHERE extraction_name = %s AND status = 'OK' 
-                        ORDER BY chunk_number DESC LIMIT 1), 
-                       50000
-                   )
-            FROM etl_control
-            WHERE extraction_name = %s AND status = 'OK'
-        """, (extraction_name, extraction_name))
-        result = cursor.fetchone()
-        cursor.close()
-        return {"chunk": result[0], "batch_size": result[1]}
-
-    def save_chunk_status(self, extraction_name: str, table_name: str, chunk_number: int, rows_loaded: int, batch_size: int = 50000, status: str = "OK") -> None:
-        """Guarda el estado de un chunk en la tabla de control."""
-        if not self._connected:
-            self.connect()
-
-        cursor = self.connection.cursor()
-        cursor.execute("""
-            INSERT INTO etl_control (extraction_name, table_name, chunk_number, rows_loaded, batch_size, status)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (extraction_name, chunk_number)
-            DO UPDATE SET rows_loaded = %s, batch_size = %s, status = %s, updated_at = NOW()
-        """, (extraction_name, table_name, chunk_number, rows_loaded, batch_size, status, rows_loaded, batch_size, status))
-        self.connection.commit()
         cursor.close()
 
     def insert_batch(self, data: List[Dict], table: str) -> int:

@@ -187,7 +187,6 @@ class OracleExtractor(BaseExtractor):
             table_logger.info(f"  Batch Size Optimizado: {batch_info['batch_size']}")
             table_logger.info(f"  Batch Size Final: {final_batch_size}")
             table_logger.info(f"  Total Lotes: {final_batch_count}")
-            table_logger.info(f"  Registros por Core: {batch_info['rows_per_core']}")
             table_logger.info(f"  Memoria Estimada por Lote: {batch_info['estimated_memory_mb']} MB")
 
             table_logger.info("Paso 6/6: Extrayendo datos...")

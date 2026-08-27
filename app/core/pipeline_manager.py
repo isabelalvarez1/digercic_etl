@@ -5,8 +5,6 @@ from typing import Any, Dict, List
 from datetime import datetime
 from config.logging_config import logger, setup_table_logger
 from core.factory import ExtractorFactory, LoaderFactory
-from core.extractors.oracle_extractor import OracleExtractor
-from core.loaders.postgres_loader import PostgresLoader
 from core.resource_monitor import ResourceMonitor
 
 
@@ -141,7 +139,7 @@ class PipelineManager:
     def _run_streaming(self, extractions: List[Dict], loads: List[Dict]) -> Dict[str, Any]:
         """
         Modo streaming: extrae de Oracle y carga a PostgreSQL chunk por chunk.
-        Incluye resume automatico, batch dinamico y workers paralelos.
+        Incluye batch dinamico y workers paralelos (pre-fetch).
         """
         import concurrent.futures
         import threading
@@ -182,7 +180,6 @@ class PipelineManager:
 
                 extractor.connect()
                 loader.connect()
-                loader.create_control_table()
                 monitor.register_connection()
 
                 table_logger = setup_table_logger(table)
@@ -198,8 +195,7 @@ class PipelineManager:
                 table_logger.info(f"Columnas: {num_columns}")
                 table_logger.info(f"Tabla destino: {table}")
 
-                # Calcular batch_size dinamico
-                from app.core.utils import get_system_resources, calculate_optimal_batch_size
+                from core.utils import get_system_resources, calculate_optimal_batch_size
                 resources = get_system_resources()
                 batch_info = calculate_optimal_batch_size(total_rows, resources, num_columns)
                 batch_size = batch_info["batch_size"]
@@ -211,63 +207,46 @@ class PipelineManager:
 
                 loader.prepare_table(table, columns)
 
-                last_chunk_info = loader.get_last_chunk(name)
-                last_chunk = last_chunk_info["chunk"]
-                last_batch_size = last_chunk_info["batch_size"]
-                
-                if last_chunk > 0:
-                    table_logger.info(f"RESUME desde chunk {last_chunk + 1} (ultimo completado: {last_chunk}, batch anterior: {last_batch_size:,})")
-                    start_offset = last_chunk * last_batch_size
-                    total_loaded = last_chunk * last_batch_size
-                else:
-                    table_logger.info(f"Iniciando desde chunk 1")
-                    start_offset = 0
-                    total_loaded = 0
+                table_logger.info(f"Iniciando desde chunk 1")
 
-                # Workers paralelos: extraer siguiente chunk mientras se carga el actual
-                next_chunk_data = [None]  # Mutable para closure
+                next_chunk_data = [None]
                 next_chunk_lock = threading.Lock()
-                
-                def extract_next_chunk():
-                    """Extrae el siguiente chunk en background."""
-                    next_offset = offset_ref[0] + batch_size
+
+                def extract_next_chunk(next_offset):
                     if next_offset < total_rows:
                         data = extractor.extract_batch(query, next_offset, batch_size, columns, params)
                         with next_chunk_lock:
                             next_chunk_data[0] = data
 
-                offset_ref = [start_offset]
-                chunk_num = last_chunk
+                chunk_num = 0
+                total_loaded = 0
+                offset = 0
                 chunk_start = datetime.now()
-                
-                # Pre-extract primer chunk
-                chunk_data = extractor.extract_batch(query, start_offset, batch_size, columns, params)
-                
-                while offset_ref[0] < total_rows:
+
+                chunk_data = extractor.extract_batch(query, offset, batch_size, columns, params)
+
+                while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
-                    
+
                     if not chunk_data:
                         break
 
-                    # Lanzar extraccion del siguiente chunk en background
-                    extract_thread = threading.Thread(target=extract_next_chunk)
+                    next_offset = offset + batch_size
+                    extract_thread = threading.Thread(target=extract_next_chunk, args=(next_offset,))
                     extract_thread.start()
 
-                    # Cargar chunk actual (mientras se extrae el siguiente)
                     loaded = loader.insert_batch(chunk_data, table)
-                    loader.save_chunk_status(name, table, chunk_num, loaded, batch_size, "OK")
                     total_loaded += loaded
 
-                    # Esperar que termine la extraccion del siguiente
                     extract_thread.join()
-                    
+
                     with next_chunk_lock:
                         chunk_data = next_chunk_data[0]
                         next_chunk_data[0] = None
 
-                    offset_ref[0] += batch_size
+                    offset += batch_size
                     chunk_num += 1
-                    
+
                     chunk_end = datetime.now()
                     chunk_duration = (chunk_end - chunk_start).total_seconds()
                     chunk_start = chunk_end
