@@ -201,10 +201,17 @@ class PipelineManager:
                 threads_extract = auto_config["threads_extract"]
                 prefetch_chunks = auto_config["prefetch_chunks"]
                 
+                # Verificar si chunks adaptativos están habilitados
+                adaptive_enabled = os.getenv("ADAPTIVE_CHUNKS", "true").lower() == "true"
+                
                 table_logger.info(f"{'='*50}")
                 table_logger.info(f"CONFIGURACION AUTOMATICA DETECTADA:")
                 table_logger.info(f"  CPU: {auto_config['system']['cpu_cores']} cores | RAM: {auto_config['system']['memory_available_gb']}GB disponible")
-                table_logger.info(f"  Batch Size: {batch_size:,} registros/chunk")
+                table_logger.info(f"  Batch Size Inicial: {batch_size:,} registros/chunk")
+                table_logger.info(f"  Chunks adaptativos: {'HABILITADOS' if adaptive_enabled else 'DESHABILITADOS'}")
+                if adaptive_enabled:
+                    table_logger.info(f"  Factor reduccion: {os.getenv('CHUNK_SIZE_REDUCTION_FACTOR', '0.8')}")
+                    table_logger.info(f"  Factor aumento: {os.getenv('CHUNK_SIZE_INCREASE_FACTOR', '1.2')}")
                 table_logger.info(f"  Chunks estimados: {auto_config['batch_count']:,}")
                 table_logger.info(f"  Threads extraccion: {threads_extract}")
                 table_logger.info(f"  Pre-fetch chunks: {prefetch_chunks}")
@@ -241,6 +248,9 @@ class PipelineManager:
 
                 while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
+                    
+                    # Ajustar chunk size dinámicamente según recursos
+                    batch_size = monitor.adjust_chunk_size(batch_size)
 
                     # Obtener chunk de la cola
                     with prefetch_lock:
@@ -288,7 +298,8 @@ class PipelineManager:
                     eta_min = int(eta_seconds / 60)
 
                     status = monitor.get_status()
-                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB")
+                    resource_level = monitor.get_resource_level()
+                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {batch_size:,} | Nivel: {resource_level}")
 
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
