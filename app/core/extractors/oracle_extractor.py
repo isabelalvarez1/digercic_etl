@@ -290,16 +290,53 @@ class OracleExtractor(BaseExtractor):
         cursor.close()
         return columns
 
+    def _is_connected(self) -> bool:
+        """Verifica si la conexión está activa."""
+        if not self._connected or not self.connection:
+            return False
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT 1 FROM DUAL")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Exception:
+            self._connected = False
+            return False
+
+    def _ensure_connected(self) -> None:
+        """Asegura que la conexión esté activa, reconecta si es necesario."""
+        if not self._is_connected():
+            logger.warning("[OracleExtractor] Conexión perdida, reconectando...")
+            self._connected = False
+            self.connect()
+
     def extract_batch(self, query: str, offset: int, batch_size: int, columns: List[str], params: Optional[Dict] = None) -> List[Dict]:
-        """Extrae un solo batch de datos."""
+        """Extrae un solo batch de datos con reconexión automática."""
         if params is None:
             params = {}
-        cursor = self.connection.cursor()
-        batch_query = self._build_batch_query(query, offset, batch_size)
-        cursor.execute(batch_query, params)
-        rows = cursor.fetchall()
-        cursor.close()
-        return [dict(zip(columns, row)) for row in rows]
+        
+        self._ensure_connected()
+        
+        try:
+            cursor = self.connection.cursor()
+            batch_query = self._build_batch_query(query, offset, batch_size)
+            cursor.execute(batch_query, params)
+            rows = cursor.fetchall()
+            cursor.close()
+            return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            if "DPY-4033" in str(e) or "connection" in str(e).lower():
+                logger.warning(f"[OracleExtractor] Conexión perdida durante extracción: {e}")
+                self._connected = False
+                self.connect()
+                cursor = self.connection.cursor()
+                batch_query = self._build_batch_query(query, offset, batch_size)
+                cursor.execute(batch_query, params)
+                rows = cursor.fetchall()
+                cursor.close()
+                return [dict(zip(columns, row)) for row in rows]
+            raise
 
     def extract_to_polars(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> pl.DataFrame:
         data = self.extract(query, params, table_name)

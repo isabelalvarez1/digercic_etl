@@ -347,10 +347,30 @@ class PostgresLoader(BaseLoader):
 
         cursor.close()
 
+    def _is_connected(self) -> bool:
+        """Verifica si la conexión está activa."""
+        if not self._connected or not self.connection:
+            return False
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+            return True
+        except Exception:
+            self._connected = False
+            return False
+
+    def _ensure_connected(self) -> None:
+        """Asegura que la conexión esté activa, reconecta si es necesario."""
+        if not self._is_connected():
+            logger.warning("[PostgresLoader] Conexión perdida, reconectando...")
+            self._connected = False
+            self.connect()
+
     def insert_batch(self, data: List[Dict], table: str) -> int:
         """Inserta un batch de registros usando COPY (rapido) o fallback a INSERT."""
-        if not self._connected:
-            self.connect()
+        self._ensure_connected()
 
         if not data:
             return 0
@@ -359,6 +379,7 @@ class PostgresLoader(BaseLoader):
             return self._copy_batch(data, table)
         except Exception as e:
             logger.warning(f"[PostgresLoader] COPY fallo, usando INSERT: {e}")
+            self._ensure_connected()
             return self._insert_batch_fallback(data, table)
 
     def _copy_batch(self, data: List[Dict], table: str) -> int:
