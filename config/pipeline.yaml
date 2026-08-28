@@ -1,6 +1,6 @@
 pipeline:
   name: digercic_etl
-  description: Pipeline ETL con dos fuentes Oracle secuenciales
+  description: Pipeline ETL Oracle a PostgreSQL
   version: "4.0.0"
   parallel: false
 
@@ -28,18 +28,6 @@ extractions:
       instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_MSP}
     query: SELECT * FROM HCUE_REPOSITORIO.VM_ATENCIONES_NINOS_HCUE
     params: {}
-
-  # - name: cedulados_digercic
-  #   source: oracle
-  #   config:
-  #     host: ${ORACLE_HOST_DIGERCIC}
-  #     port: ${ORACLE_PORT_DIGERCIC}
-  #     service: ${ORACLE_SERVICE_DIGERCIC}
-  #     user: ${ORACLE_USER_DIGERCIC}
-  #     password: ${ORACLE_PASSWORD_DIGERCIC}
-  #     instant_client_dir: ${ORACLE_INSTANT_CLIENT_DIR_DIGERCIC}
-  #   query: SELECT * FROM CAPTACION.CAPTACIONES
-  #   params: {}
 
 transformations:
   enabled: false
@@ -70,19 +58,6 @@ loads:
       truncate_before_load: "true"
     table: atenciones_ninos_hcue_pruebas
     mode: insert
-
-  # - name: cedulados_digercic_to_postgres
-  #   source: cedulados_digercic
-  #   target: postgresql
-  #   config:
-  #     host: ${POSTGRES_HOST}
-  #     port: ${POSTGRES_PORT}
-  #     database: ${POSTGRES_DATABASE}
-  #     user: ${POSTGRES_USER}
-  #     password: ${POSTGRES_PASSWORD}
-  #     truncate_before_load: "true"
-  #   table: cedulados_prueba_digercic
-  #   mode: insert
 
 logging:
   level: INFO

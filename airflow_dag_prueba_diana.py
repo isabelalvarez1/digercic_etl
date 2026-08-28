@@ -31,16 +31,11 @@ dag = DAG(
 ETL_PATH = "/home/python_etl/digercic_etl"
 PYTHON = f"{ETL_PATH}/.venv/bin/python"
 
-CMD_CEDULADOS = (
+# Un solo comando - ejecuta ambas tablas en secuencia
+CMD_ETL = (
     f"cd {ETL_PATH} && "
     f"{PYTHON} run.py "
-    f"--config config/pipeline_cedulados.yaml"
-)
-
-CMD_ATENCIONES = (
-    f"cd {ETL_PATH} && "
-    f"{PYTHON} run.py "
-    f"--config config/pipeline_atenciones.yaml"
+    f"--config config/pipeline.yaml"
 )
 
 
@@ -54,29 +49,16 @@ inicio = DummyOperator(
 )
 
 
-ETL_CEDULADOS = SSHOperator(
-    task_id="ETL_CEDULADOS",
+ETL_SYNC = SSHOperator(
+    task_id="ETL_SYNC",
     ssh_conn_id="server50",
-    command=CMD_CEDULADOS,
+    command=CMD_ETL,
     dag=dag,
 )
-
-
-ETL_ATENCIONES = SSHOperator(
-    task_id="ETL_ATENCIONES",
-    ssh_conn_id="server50",
-    command=CMD_ATENCIONES,
-    dag=dag,
-)
-
-
-# Permite continuar aunque ETL_CEDULADOS falle
-ETL_ATENCIONES.set_upstream(ETL_CEDULADOS)
 
 
 fin = DummyOperator(
     task_id="fin",
-    trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
     dag=dag,
 )
 
@@ -85,4 +67,4 @@ fin = DummyOperator(
 # SECUENCIA
 # ============================
 
-inicio >> ETL_CEDULADOS >> ETL_ATENCIONES >> fin
+inicio >> ETL_SYNC >> fin
