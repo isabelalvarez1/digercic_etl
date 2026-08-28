@@ -1,8 +1,8 @@
 pipeline:
   name: digercic_etl
-  description: Pipeline ETL con dos fuentes Oracle simultaneas
+  description: Pipeline ETL con dos fuentes Oracle secuenciales
   version: "4.0.0"
-  parallel: true
+  parallel: false
 
 extractions:
   - name: cedulados_msp
