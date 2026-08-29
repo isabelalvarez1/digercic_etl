@@ -336,7 +336,10 @@ class OracleExtractor(BaseExtractor):
                 rows = cursor.fetchall()
                 cursor.close()
                 return [dict(zip(columns, row)) for row in rows]
-            raise
+            else:
+                logger.error(f"[OracleExtractor] Error en extracción batch (offset={offset}, size={batch_size}): {e}")
+                logger.error(f"[OracleExtractor] Query: {batch_query[:200]}...")
+                raise
 
     def extract_to_polars(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> pl.DataFrame:
         data = self.extract(query, params, table_name)

@@ -1,5 +1,7 @@
 import os
 import re
+import gc
+import psutil
 import concurrent.futures
 from typing import Any, Dict, List
 from datetime import datetime
@@ -153,6 +155,7 @@ class PipelineManager:
         load_results = {}
 
         for ext_config in extractions:
+            table_start_time = datetime.now()
             name = ext_config.get("name", "unnamed")
             source_type = ext_config.get("source")
             source_config = ext_config.get("config", {})
@@ -178,22 +181,30 @@ class PipelineManager:
                 loader = LoaderFactory.create(target_type, target_config)
                 monitor = ResourceMonitor()
 
+                table_logger = setup_table_logger(table)
+                table_logger.info(f"{'='*60}")
+                table_logger.info(f"INICIO TABLA: {name}")
+                table_logger.info(f"Tabla destino: {table}")
+                table_logger.info(f"Fecha inicio: {table_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                table_logger.info(f"{'='*60}")
+
+                table_logger.info(f"[1/6] Conectando a Oracle...")
                 extractor.connect()
+                table_logger.info(f"[1/6] Conexión Oracle exitosa")
+
+                table_logger.info(f"[2/6] Conectando a PostgreSQL...")
                 loader.connect()
+                table_logger.info(f"[2/6] Conexión PostgreSQL exitosa")
+
                 monitor.register_connection()
 
-                table_logger = setup_table_logger(table)
-                table_logger.info(f"{'='*50}")
-                table_logger.info(f"INICIO STREAMING: {name}")
-                table_logger.info(f"{'='*50}")
-
+                table_logger.info(f"[3/6] Obteniendo estructura de tabla...")
                 columns = extractor.get_columns(query, params)
                 total_rows = extractor.get_count(query, params)
                 num_columns = len(columns)
                 
-                table_logger.info(f"Total registros: {total_rows:,}")
-                table_logger.info(f"Columnas: {num_columns}")
-                table_logger.info(f"Tabla destino: {table}")
+                table_logger.info(f"  Total registros: {total_rows:,}")
+                table_logger.info(f"  Columnas: {num_columns}")
 
                 from core.utils import calculate_optimal_config
                 auto_config = calculate_optimal_config(total_rows, num_columns)
@@ -204,24 +215,20 @@ class PipelineManager:
                 # Verificar si chunks adaptativos están habilitados
                 adaptive_enabled = os.getenv("ADAPTIVE_CHUNKS", "true").lower() == "true"
                 
-                table_logger.info(f"{'='*50}")
-                table_logger.info(f"CONFIGURACION AUTOMATICA DETECTADA:")
+                table_logger.info(f"[4/6] Configuración automática:")
                 table_logger.info(f"  CPU: {auto_config['system']['cpu_cores']} cores | RAM: {auto_config['system']['memory_available_gb']}GB disponible")
-                table_logger.info(f"  Batch Size Inicial: {batch_size:,} registros/chunk")
-                table_logger.info(f"  Chunks adaptativos: {'HABILITADOS' if adaptive_enabled else 'DESHABILITADOS'}")
-                if adaptive_enabled:
-                    table_logger.info(f"  Factor reduccion: {os.getenv('CHUNK_SIZE_REDUCTION_FACTOR', '0.8')}")
-                    table_logger.info(f"  Factor aumento: {os.getenv('CHUNK_SIZE_INCREASE_FACTOR', '1.2')}")
+                table_logger.info(f"  Batch Size: {batch_size:,} registros/chunk")
                 table_logger.info(f"  Chunks estimados: {auto_config['batch_count']:,}")
-                table_logger.info(f"  Threads extraccion: {threads_extract}")
-                table_logger.info(f"  Pre-fetch chunks: {prefetch_chunks}")
+                table_logger.info(f"  Threads: {threads_extract} | Pre-fetch: {prefetch_chunks}")
                 table_logger.info(f"  Memoria estimada: {auto_config['estimated_memory_mb']:.1f} MB")
                 table_logger.info(f"  Tiempo estimado: {auto_config['estimated_time_copy_min']:.1f} min")
-                table_logger.info(f"{'='*50}")
 
+                table_logger.info(f"[5/6] Preparando tabla destino...")
                 loader.prepare_table(table, columns)
+                table_logger.info(f"[5/6] Tabla lista para carga")
 
-                table_logger.info(f"Iniciando extraccion y carga...")
+                table_logger.info(f"[6/6] Iniciando extracción y carga...")
+                table_logger.info(f"{'-'*60}")
 
                 prefetch_queue = []
                 prefetch_lock = threading.Lock()
@@ -299,20 +306,47 @@ class PipelineManager:
 
                     status = monitor.get_status()
                     resource_level = monitor.get_resource_level()
-                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {batch_size:,} | Nivel: {resource_level}")
+                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {batch_size:,}")
 
+                table_end_time = datetime.now()
+                table_duration = (table_end_time - table_start_time).total_seconds()
+                
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
 
-                table_logger.info(f"{'='*50}")
-                table_logger.info(f"COMPLETADO: {total_loaded:,} registros en {(datetime.now() - start_time).seconds}s")
-                table_logger.info(f"{'='*50}")
+                table_logger.info(f"{'='*60}")
+                table_logger.info(f"COMPLETADO: {name}")
+                table_logger.info(f"  Registros extraidos: {total_loaded:,}")
+                table_logger.info(f"  Registros cargados: {total_loaded:,}")
+                table_logger.info(f"  Tiempo total tabla: {table_duration:.1f}s ({table_duration/60:.1f} min)")
+                table_logger.info(f"  Velocidad: {total_loaded/table_duration:.0f} registros/segundo" if table_duration > 0 else "  Velocidad: N/A")
+                table_logger.info(f"  Fecha fin: {table_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                table_logger.info(f"{'='*60}")
 
                 monitor.unregister_connection()
                 extractor.disconnect()
                 loader.disconnect()
+                
+                # Liberar memoria después de cada tabla
+                gc.collect()
+                ram_after = psutil.virtual_memory().available / (1024**3)
+                table_logger.info(f"Memoria liberada - RAM disponible: {ram_after:.2f}GB")
+                logger.info(f"[{name}] Completado en {table_duration:.1f}s - RAM: {ram_after:.2f}GB")
 
             except Exception as e:
+                table_end_time = datetime.now()
+                table_duration = (table_end_time - table_start_time).total_seconds()
+                
+                # Log detallado del error en el archivo de la tabla
+                table_logger.error(f"{'='*60}")
+                table_logger.error(f"ERROR EN TABLA: {name}")
+                table_logger.error(f"  Error: {str(e)}")
+                table_logger.error(f"  Tipo: {type(e).__name__}")
+                table_logger.error(f"  Tiempo hasta error: {table_duration:.1f}s")
+                table_logger.error(f"  Registros procesados antes del error: {total_loaded:,}" if 'total_loaded' in locals() else "  Registros procesados: 0")
+                table_logger.error(f"{'='*60}")
+                
+                # También log en el logger general
                 logger.exception(f"[{name}] Error en streaming: {e}")
                 extraction_results[name] = 0
                 load_results[name] = 0

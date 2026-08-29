@@ -378,9 +378,14 @@ class PostgresLoader(BaseLoader):
         try:
             return self._copy_batch(data, table)
         except Exception as e:
-            logger.warning(f"[PostgresLoader] COPY fallo, usando INSERT: {e}")
+            logger.warning(f"[PostgresLoader] COPY fallo ({len(data)} registros), usando INSERT: {e}")
             self._ensure_connected()
-            return self._insert_batch_fallback(data, table)
+            try:
+                return self._insert_batch_fallback(data, table)
+            except Exception as e2:
+                logger.error(f"[PostgresLoader] INSERT también falló: {e2}")
+                logger.error(f"[PostgresLoader] Tabla: {table}, Registros: {len(data)}")
+                raise
 
     def _copy_batch(self, data: List[Dict], table: str) -> int:
         """Inserta usando COPY (10-50x mas rapido que INSERT)."""
