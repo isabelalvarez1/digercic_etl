@@ -58,6 +58,13 @@ def calculate_optimal_config(total_rows: int, num_columns: int) -> Dict[str, Any
     batch_max = int(os.getenv("BATCH_SIZE_MAX", "1000000"))
     bytes_per_cell = int(os.getenv("BATCH_BYTES_PER_CELL", "100"))
     
+    # === AJUSTAR BATCH_MAX SEGÚN COLUMNAS ===
+    # Si hay muchas columnas, reducir batch_max para no exceder RAM
+    if num_columns > 80:
+        batch_max = min(batch_max, 500000)  # Máx 500K registros con 80+ columnas
+    elif num_columns > 50:
+        batch_max = min(batch_max, 750000)  # Máx 750K registros con 50+ columnas
+    
     # === CALCULAR BATCH SIZE ===
     bytes_per_row = num_columns * bytes_per_cell
     memory_for_batch = memory_available * 1024 * 1024 * 1024 * memory_percent
@@ -76,13 +83,16 @@ def calculate_optimal_config(total_rows: int, num_columns: int) -> Dict[str, Any
     threads_load = int(os.getenv("THREADS_LOAD", str(max(1, default_threads // 2))))
     
     # === CALCULAR PRE-FETCH AUTOMATICAMENTE ===
-    # Si hay mucha RAM, pre-cargar más chunks adelante
-    if memory_available >= 8:
-        default_prefetch = 4
-    elif memory_available >= 4:
-        default_prefetch = 3
-    elif memory_available >= 2:
+    # Reducido para tablas anchas - extraer y cargar en paralelo
+    if num_columns > 80:
+        # Tablas anchas: solo 1 chunk adelante
+        default_prefetch = 1
+    elif memory_available >= 8:
         default_prefetch = 2
+    elif memory_available >= 4:
+        default_prefetch = 2
+    elif memory_available >= 2:
+        default_prefetch = 1
     else:
         default_prefetch = 1
     prefetch_chunks = int(os.getenv("PREFETCH_CHUNKS", str(default_prefetch)))

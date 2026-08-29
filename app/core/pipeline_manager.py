@@ -244,14 +244,12 @@ class PipelineManager:
                 offset = 0
                 chunk_start = datetime.now()
 
-                # Pre-extract primeros chunks segun configuracion
-                initial_threads = []
-                for i in range(prefetch_chunks):
-                    t = threading.Thread(target=extract_chunk_at, args=(offset + (i * batch_size),))
-                    initial_threads.append(t)
-                    t.start()
-                for t in initial_threads:
-                    t.join()
+                # Extraer solo el primer chunk para empezar rápido
+                if total_rows > 0:
+                    table_logger.info(f"[6/6] Extrayendo primer chunk...")
+                    first_data = extractor.extract_batch(query, 0, batch_size, columns, params)
+                    prefetch_queue.append((0, first_data))
+                    table_logger.info(f"[6/6] Primer chunk listo - iniciando carga inmediata")
 
                 while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
