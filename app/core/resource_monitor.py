@@ -22,13 +22,13 @@ class ResourceMonitor:
         
         # Configuración desde variables de entorno (prioridad) o config
         self.max_cpu_percent = int(os.getenv("RESOURCE_MAX_CPU_PERCENT", 
-                                  str(self.config.get("max_cpu_percent", 80))))
+                                  str(self.config.get("max_cpu_percent", 90))))
         self.max_ram_percent = int(os.getenv("RESOURCE_MAX_RAM_PERCENT", 
-                                  str(self.config.get("max_ram_percent", 70))))
+                                  str(self.config.get("max_ram_percent", 90))))
         self.min_ram_mb = int(os.getenv("RESOURCE_MIN_RAM_MB", 
                               str(self.config.get("min_ram_mb", 512))))
         self.check_interval = int(os.getenv("RESOURCE_CHECK_INTERVAL", 
-                                  str(self.config.get("check_interval", 5))))
+                                  str(self.config.get("check_interval", 3))))
         
         # Configuración de chunks adaptativos
         self.adaptive_chunks = os.getenv("ADAPTIVE_CHUNKS", "true").lower() == "true"
@@ -70,13 +70,13 @@ class ResourceMonitor:
         ram_percent = status["ram_used_percent"]
         cpu_percent = status["cpu_percent"]
         
-        # Si ambos están bajo los umbrales, hay recursos altos
-        if ram_percent < 50 and cpu_percent < 50:
+        # Si RAM está bajo 50% y CPU bajo 70%, recursos altos
+        if ram_percent < 50 and cpu_percent < 70:
             return "high"
-        # Si alguno está cerca del umbral, recursos medios
-        elif ram_percent < self.max_ram_percent and cpu_percent < self.max_cpu_percent:
+        # Si RAM está bajo umbral máximo y CPU bajo 90%, recursos medios
+        elif ram_percent < self.max_ram_percent and cpu_percent < 90:
             return "medium"
-        # Si alguno supera el umbral, recursos bajos
+        # Si RAM supera umbral o CPU muy alta, recursos bajos
         else:
             return "low"
 
@@ -91,15 +91,19 @@ class ResourceMonitor:
         
         reasons = []
         
-        if status["cpu_percent"] > self.max_cpu_percent:
-            reasons.append(f"CPU: {status['cpu_percent']:.1f}% > {self.max_cpu_percent}%")
-        
+        # Solo bloquear por RAM, no por CPU
+        # La CPU se ajusta con chunks dinámicos, no con espera
         available_mb = status["ram_available_gb"] * 1024
         if available_mb < self.min_ram_mb:
             reasons.append(f"RAM: {available_mb:.0f}MB < {self.min_ram_mb}MB")
         
         if status["ram_used_percent"] > self.max_ram_percent:
             reasons.append(f"RAM uso: {status['ram_used_percent']:.1f}% > {self.max_ram_percent}%")
+        
+        # CPU alta es advertencia, no bloqueo
+        if status["cpu_percent"] > self.max_cpu_percent:
+            # Solo log en debug para no llenar el log
+            pass
         
         can_run = len(reasons) == 0
         resource_level = self.get_resource_level()
@@ -109,6 +113,7 @@ class ResourceMonitor:
     def wait_for_resources(self, task_name=""):
         """
         Espera hasta que haya recursos disponibles.
+        Solo bloquea cuando recursos están críticos.
         
         Returns:
             dict: Status con información de recursos
@@ -120,8 +125,23 @@ class ResourceMonitor:
                 logger.info(f"[ResourceMonitor] {task_name} - Recursos OK: CPU={status['cpu_percent']:.1f}% RAM={status['ram_available_gb']:.1f}GB")
                 return status
             
-            logger.info(f"[ResourceMonitor] {task_name} - Esperando recursos: {', '.join(reasons)}")
-            time.sleep(self.check_interval)
+            # Solo bloquear si RAM está realmente baja (no CPU)
+            ram_critical = status["ram_used_percent"] > self.max_ram_percent
+            ram_low = (status["ram_available_gb"] * 1024) < self.min_ram_mb
+            
+            if ram_critical or ram_low:
+                # Si RAM está entre 90-95%, reducir chunk en lugar de esperar
+                if 90 <= status["ram_used_percent"] <= 95:
+                    logger.info(f"[ResourceMonitor] {task_name} - RAM alta ({status['ram_used_percent']:.1f}%) pero continuando con chunks reducidos")
+                    return status
+                else:
+                    # Si RAM > 95%, esperar menos tiempo
+                    logger.info(f"[ResourceMonitor] {task_name} - Esperando recursos: {', '.join(reasons)}")
+                    time.sleep(2)  # Reducido de 3-5 a 2 segundos
+            else:
+                # CPU alta pero RAM OK - no bloquear, solo advertir
+                logger.info(f"[ResourceMonitor] {task_name} - CPU alta pero continuando: CPU={status['cpu_percent']:.1f}% RAM={status['ram_available_gb']:.1f}GB")
+                return status
     
     def adjust_chunk_size(self, current_chunk_size):
         """
@@ -149,17 +169,25 @@ class ResourceMonitor:
         new_chunk_size = current_chunk_size
         
         if resource_level == "low":
-            # Recursos bajos: reducir chunk
-            new_chunk_size = int(current_chunk_size * self.chunk_size_reduction_factor)
+            # Recursos bajos: reducir chunk más agresivamente
+            reduction = self.chunk_size_reduction_factor
+            if status["ram_used_percent"] > 92:
+                reduction = 0.5  # Reducir 50% si RAM > 92%
+            elif status["ram_used_percent"] > 90:
+                reduction = 0.6  # Reducir 40% si RAM > 90%
+            elif status["cpu_percent"] > 90:
+                reduction = 0.7  # Reducir 30% si CPU > 90%
+            
+            new_chunk_size = int(current_chunk_size * reduction)
             new_chunk_size = max(new_chunk_size, self.chunk_size_min)
-            logger.info(f"[ResourceMonitor] Recursos BAJOS - Reduciendo chunk: {current_chunk_size:,} → {new_chunk_size:,} (RAM: {status['ram_used_percent']:.1f}%)")
+            logger.info(f"[ResourceMonitor] Recursos BAJOS - Reduciendo chunk: {current_chunk_size:,} → {new_chunk_size:,} (CPU: {status['cpu_percent']:.1f}%, RAM: {status['ram_used_percent']:.1f}%)")
         
         elif resource_level == "high":
             # Recursos altos: aumentar chunk
             new_chunk_size = int(current_chunk_size * self.chunk_size_increase_factor)
             new_chunk_size = min(new_chunk_size, self.chunk_size_max)
             if new_chunk_size != current_chunk_size:
-                logger.info(f"[ResourceMonitor] Recursos ALTOS - Aumentando chunk: {current_chunk_size:,} → {new_chunk_size:,} (RAM: {status['ram_used_percent']:.1f}%)")
+                logger.info(f"[ResourceMonitor] Recursos ALTOS - Aumentando chunk: {current_chunk_size:,} → {new_chunk_size:,} (CPU: {status['cpu_percent']:.1f}%, RAM: {status['ram_used_percent']:.1f}%)")
         
         # Recursos medios: mantener chunk actual
         return new_chunk_size
