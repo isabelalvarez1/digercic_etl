@@ -4,8 +4,6 @@ from airflow.models import DAG
 from airflow.operators.dummy_operator import DummyOperator
 from airflow.providers.ssh.operators.ssh import SSHOperator
 from airflow.providers.ssh.hooks.ssh import SSHHook
-from airflow.utils.trigger_rule import TriggerRule
-
 
 args = {
     "owner": "DSN",
