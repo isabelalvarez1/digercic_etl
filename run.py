@@ -24,14 +24,9 @@ from config.logging_config import logger
 from core.pipeline_manager import PipelineManager
 
 
-def main(config_path=None, env_path=None, table_filter=None):
+def main(config_path=None, env_path=None):
     """
     Punto de entrada principal para el pipeline ETL.
-    
-    Args:
-        config_path: Ruta al archivo YAML de configuracion
-        env_path: Ruta al archivo .env
-        table_filter: Nombre de la tabla a procesar (None = todas)
     """
     logger.info("=" * 50)
     logger.info("ETL DIGERCIC - MULTI-FUENTE ORACLE")
@@ -50,11 +45,6 @@ def main(config_path=None, env_path=None, table_filter=None):
 
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-
-        # Filtrar por tabla especifica si se solicita
-        if table_filter:
-            config = _filter_config_by_table(config, table_filter)
-            logger.info(f"Filtro de tabla activo: {table_filter}")
 
         logger.info(f"Pipeline: {config.get('pipeline', {}).get('name', 'desconocido')}")
         logger.info(f"Version: {config.get('pipeline', {}).get('version', '1.0')}")
@@ -79,24 +69,6 @@ def main(config_path=None, env_path=None, table_filter=None):
         raise
 
 
-def _filter_config_by_table(config, table_name):
-    """Filtra la configuracion para procesar solo una tabla especifica."""
-    config = config.copy()
-    
-    # Buscar la extraccion que coincida con el nombre
-    extractions = config.get("extractions", [])
-    config["extractions"] = [e for e in extractions if e.get("name") == table_name]
-    
-    # Buscar la carga que coincida con el nombre de la extraccion
-    loads = config.get("loads", [])
-    config["loads"] = [l for l in loads if l.get("source") == table_name]
-    
-    if not config["extractions"]:
-        raise ValueError(f"No se encontro extraccion con nombre: {table_name}")
-    
-    return config
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ETL DIGERCIC - Multi-fuente Oracle")
     parser.add_argument(
@@ -109,10 +81,5 @@ if __name__ == "__main__":
         default=None,
         help="Ruta al archivo .env (default: .env)"
     )
-    parser.add_argument(
-        "--table", "-t",
-        default=None,
-        help="Nombre de la tabla a procesar (ej: cedulados_msp). Si no se especifica, procesa todas."
-    )
     args = parser.parse_args()
-    main(args.config, args.env, args.table)
+    main(args.config, args.env)

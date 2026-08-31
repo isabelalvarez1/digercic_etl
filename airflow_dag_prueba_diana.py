@@ -5,7 +5,6 @@ from airflow.operators.dummy_operator import DummyOperator
 from airflow.providers.ssh.operators.ssh import SSHOperator
 from airflow.providers.ssh.hooks.ssh import SSHHook
 
-
 args = {
     "owner": "DSN",
     "start_date": pendulum.datetime(
@@ -25,24 +24,22 @@ dag = DAG(
 
 
 # ============================
-# CONFIGURACION ETL
+# CONFIGURACIÓN ETL
 # ============================
 
 ETL_PATH = "/home/python_etl/digercic_etl"
 PYTHON = f"{ETL_PATH}/.venv/bin/python"
-CONFIG = f"{ETL_PATH}/config/pipeline.yaml"
 
-
-def cmd_etl(table_name=None):
-    """Genera el comando ETL para una tabla especifica o todas."""
-    cmd = f"cd {ETL_PATH} && {PYTHON} run.py --config {CONFIG}"
-    if table_name:
-        cmd += f" --table {table_name}"
-    return cmd
+# Un solo comando - ejecuta ambas tablas en secuencia
+CMD_ETL = (
+    f"cd {ETL_PATH} && "
+    f"{PYTHON} run.py "
+    f"--config config/pipeline.yaml"
+)
 
 
 # ============================
-# CONEXION SSH
+# CONEXIÓN SSH
 # ============================
 
 ssh_hook = SSHHook(ssh_conn_id="server50")
@@ -57,21 +54,14 @@ inicio = DummyOperator(
     dag=dag,
 )
 
-# --- Tabla 1: cedulados_msp ---
-cedulados_extract = SSHOperator(
-    task_id="cedulados_msp_extract_load",
+
+ETL_SYNC = SSHOperator(
+    task_id="ETL_SYNC",
     ssh_hook=ssh_hook,
-    command=cmd_etl("cedulados_msp"),
+    command=CMD_ETL,
     dag=dag,
 )
 
-# --- Tabla 2: atenciones_ninos_hcue ---
-atenciones_extract = SSHOperator(
-    task_id="atenciones_ninos_hcue_extract_load",
-    ssh_hook=ssh_hook,
-    command=cmd_etl("atenciones_ninos_hcue"),
-    dag=dag,
-)
 
 fin = DummyOperator(
     task_id="fin",
@@ -83,4 +73,4 @@ fin = DummyOperator(
 # SECUENCIA
 # ============================
 
-inicio >> [cedulados_extract, atenciones_extract] >> fin
+inicio >> ETL_SYNC >> fin
