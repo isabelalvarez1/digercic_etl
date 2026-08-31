@@ -2,7 +2,8 @@ import pendulum
 
 from airflow.models import DAG
 from airflow.operators.dummy_operator import DummyOperator
-from airflow.contrib.operators.ssh_operator import SSHOperator
+from airflow.providers.ssh.operators.ssh import SSHOperator
+from airflow.providers.ssh.hooks.ssh import SSHHook
 from airflow.utils.trigger_rule import TriggerRule
 
 
@@ -40,6 +41,13 @@ CMD_ETL = (
 
 
 # ============================
+# CONEXIÓN SSH
+# ============================
+
+ssh_hook = SSHHook(ssh_conn_id="server50")
+
+
+# ============================
 # TASKS
 # ============================
 
@@ -51,7 +59,7 @@ inicio = DummyOperator(
 
 ETL_SYNC = SSHOperator(
     task_id="ETL_SYNC",
-    ssh_conn_id="server50",
+    ssh_hook=ssh_hook,
     command=CMD_ETL,
     dag=dag,
 )
