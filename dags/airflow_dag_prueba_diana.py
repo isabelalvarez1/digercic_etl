@@ -32,16 +32,21 @@ default_args = {
 
 
 # ============================================================
-# COMANDO ETL - Todo el output va a stdout para log de Airflow
+# COMANDOS - Todo el output va a stdout para log de Airflow (142)
 # ============================================================
+
+COMMAND_CHECK = f"""
+    set -e
+    cd {PROJECT_PATH}
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [AIRFLOW] [1/2] Verificando conexiones..."
+    {PYTHON_PATH} scripts/check_connections.py --config {CONFIG_PATH} 2>&1
+    echo "[AIRFLOW] Check conexiones OK"
+"""
 
 COMMAND_ETL = f"""
     set -e
     cd {PROJECT_PATH}
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [AIRFLOW] Iniciando ETL en $(hostname)..."
-    echo "[AIRFLOW] Validando conexiones..."
-    {PYTHON_PATH} -c "import psycopg, oracledb; print('[AIRFLOW] Drivers OK')" || echo "[AIRFLOW] ADVERTENCIA: drivers no verificados"
-    echo "[AIRFLOW] Ejecutando pipeline..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [AIRFLOW] [2/2] Iniciando ETL en $(hostname)..."
     {PYTHON_PATH} run.py --config {CONFIG_PATH} 2>&1
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
@@ -66,6 +71,17 @@ with DAG(
 
     inicio = DummyOperator(task_id="inicio")
 
+    # Tarea 1: Verifica Oracle y Postgres ANTES de lanzar ETL
+    # Si falla, el DAG se marca en ROJO aquí y no ejecuta ETL
+    check_connections = SSHOperator(
+        task_id="check_connections",
+        ssh_conn_id=SSH_CONNECTION,
+        command=COMMAND_CHECK,
+        conn_timeout=30,
+        cmd_timeout=120,
+        keepalive_interval=10,
+    )
+
     etl_capta = SSHOperator(
         task_id="ETL_CAPTA",
         ssh_conn_id=SSH_CONNECTION,
@@ -78,4 +94,4 @@ with DAG(
 
     fin = DummyOperator(task_id="fin", trigger_rule="all_success")
 
-    inicio >> etl_capta >> fin
+    inicio >> check_connections >> etl_capta >> fin
