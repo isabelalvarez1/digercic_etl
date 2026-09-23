@@ -52,18 +52,19 @@ def calculate_optimal_config(total_rows: int, num_columns: int) -> Dict[str, Any
     memory_total = resources["memory_total_gb"]
     
     # === PARAMETROS CONFIGURABLES VIA ENV ===
-    memory_percent = float(os.getenv("BATCH_MEMORY_PERCENT", "0.5"))
-    cpu_multiplier = int(os.getenv("BATCH_CPU_MULTIPLIER", "100000"))
+    memory_percent = float(os.getenv("BATCH_MEMORY_PERCENT", "0.15"))
+    cpu_multiplier = int(os.getenv("BATCH_CPU_MULTIPLIER", "50000"))
     batch_min = int(os.getenv("BATCH_SIZE_MIN", "10000"))
-    batch_max = int(os.getenv("BATCH_SIZE_MAX", "1000000"))
+    batch_max = int(os.getenv("BATCH_SIZE_MAX", "500000"))
     bytes_per_cell = int(os.getenv("BATCH_BYTES_PER_CELL", "100"))
     
     # === AJUSTAR BATCH_MAX SEGÚN COLUMNAS ===
-    # Si hay muchas columnas, reducir batch_max para no exceder RAM
     if num_columns > 80:
-        batch_max = min(batch_max, 500000)  # Máx 500K registros con 80+ columnas
+        batch_max = min(batch_max, 150000)
     elif num_columns > 50:
-        batch_max = min(batch_max, 750000)  # Máx 750K registros con 50+ columnas
+        batch_max = min(batch_max, 250000)
+    elif num_columns > 30:
+        batch_max = min(batch_max, 400000)
     
     # === CALCULAR BATCH SIZE ===
     bytes_per_row = num_columns * bytes_per_cell
@@ -183,14 +184,21 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     memory_available = resources.get("memory_available_gb")
     
     # Parametros configurables desde variables de entorno
-    memory_percent = float(os.getenv("BATCH_MEMORY_PERCENT", "0.5"))
-    cpu_multiplier = int(os.getenv("BATCH_CPU_MULTIPLIER", "100000"))
+    memory_percent = float(os.getenv("BATCH_MEMORY_PERCENT", "0.15"))
+    cpu_multiplier = int(os.getenv("BATCH_CPU_MULTIPLIER", "50000"))
     batch_min = int(os.getenv("BATCH_SIZE_MIN", "10000"))
-    batch_max = int(os.getenv("BATCH_SIZE_MAX", "1000000"))
+    batch_max = int(os.getenv("BATCH_SIZE_MAX", "500000"))
     bytes_per_cell = int(os.getenv("BATCH_BYTES_PER_CELL", "100"))
     
     # Calcular basado en memoria
     bytes_per_row = num_columns * bytes_per_cell
+    
+    # Ajustar batch_max segun columnas
+    if num_columns > 80:
+        batch_max = min(batch_max, 150000)
+    elif num_columns > 50:
+        batch_max = min(batch_max, 250000)
+    
     memory_for_batch = memory_available * 1024 * 1024 * 1024 * memory_percent
     memory_based_batch = int(memory_for_batch / bytes_per_row)
     

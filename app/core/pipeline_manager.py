@@ -309,6 +309,10 @@ class PipelineManager:
                 table_end_time = datetime.now()
                 table_duration = (table_end_time - table_start_time).total_seconds()
                 
+                # Validación crítica: si no se cargó todo, es ERROR visible para Airflow
+                if total_loaded != total_rows:
+                    raise RuntimeError(f"Carga incompleta: {total_loaded:,}/{total_rows:,} registros. Se esperaba {total_rows:,}")
+
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
 
@@ -320,6 +324,8 @@ class PipelineManager:
                 table_logger.info(f"  Velocidad: {total_loaded/table_duration:.0f} registros/segundo" if table_duration > 0 else "  Velocidad: N/A")
                 table_logger.info(f"  Fecha fin: {table_end_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 table_logger.info(f"{'='*60}")
+                # Log también al logger principal para que Airflow lo capture
+                logger.info(f"[{name}] COMPLETADO: {total_loaded:,}/{total_rows:,} en {table_duration:.1f}s")
 
                 monitor.unregister_connection()
                 extractor.disconnect()
@@ -344,13 +350,17 @@ class PipelineManager:
                 table_logger.error(f"  Registros procesados antes del error: {total_loaded:,}" if 'total_loaded' in locals() else "  Registros procesados: 0")
                 table_logger.error(f"{'='*60}")
                 
-                # También log en el logger general
+                # También log en el logger general para visibilidad en Airflow
+                logger.error(f"[{name}] ERROR CRITICO: {e} - Este error marcará el DAG como FALLIDO en Airflow")
                 logger.exception(f"[{name}] Error en streaming: {e}")
                 extraction_results[name] = 0
                 load_results[name] = 0
+                # No tragarse el error: propagarlo para que el pipeline falle
+                raise
 
         elapsed = (datetime.now() - start_time).seconds
 
+        # Si llegamos aquí, todas las tablas fueron OK
         return {
             "status": "completed",
             "elapsed_seconds": elapsed,

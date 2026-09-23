@@ -22,11 +22,11 @@ class ResourceMonitor:
         
         # Configuración desde variables de entorno (prioridad) o config
         self.max_cpu_percent = int(os.getenv("RESOURCE_MAX_CPU_PERCENT", 
-                                  str(self.config.get("max_cpu_percent", 90))))
+                                  str(self.config.get("max_cpu_percent", 95))))
         self.max_ram_percent = int(os.getenv("RESOURCE_MAX_RAM_PERCENT", 
-                                  str(self.config.get("max_ram_percent", 90))))
+                                  str(self.config.get("max_ram_percent", 95))))
         self.min_ram_mb = int(os.getenv("RESOURCE_MIN_RAM_MB", 
-                              str(self.config.get("min_ram_mb", 512))))
+                              str(self.config.get("min_ram_mb", 256))))
         self.check_interval = int(os.getenv("RESOURCE_CHECK_INTERVAL", 
                                   str(self.config.get("check_interval", 3))))
         

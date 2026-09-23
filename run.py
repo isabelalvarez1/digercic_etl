@@ -19,6 +19,7 @@ app_dir = Path(__file__).parent / "app"
 sys.path.insert(0, str(app_dir))
 
 import yaml
+import json
 from dotenv import load_dotenv
 from config.logging_config import logger
 from core.pipeline_manager import PipelineManager
@@ -54,7 +55,7 @@ def main(config_path=None, env_path=None):
         manager = PipelineManager(config)
         result = manager.run()
 
-        # Resumen
+        # Resumen (visible en Airflow)
         logger.info("=" * 50)
         logger.info("RESUMEN DEL PIPELINE")
         logger.info("=" * 50)
@@ -63,10 +64,19 @@ def main(config_path=None, env_path=None):
         logger.info(f"Extracciones: {result.get('extractions', {})}")
         logger.info(f"Cargas: {result.get('loads', {})}")
         logger.info("=" * 50)
+        # JSON para Airflow XCom / parseo
+        print(f"__PIPELINE_RESULT_JSON__{json.dumps(result, ensure_ascii=False)}__END_JSON__", flush=True)
+
+        # Validar resultado para Airflow: si no es completed, fallar el task
+        if result.get("status") != "completed":
+            logger.error(f"Pipeline finalizó con status={result.get('status')} - Marcando como FALLO para Airflow")
+            sys.exit(1)
 
     except Exception as e:
         logger.exception(f"Error en pipeline principal: {e}")
-        raise
+        # Mensaje explícito para Airflow
+        print(f"AIRFLOW_ERROR: {e}", flush=True, file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

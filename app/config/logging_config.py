@@ -31,11 +31,12 @@ def setup_table_logger(table_name: str) -> logging.Logger:
     # Evitar duplicar handlers si ya existe
     if not table_logger.handlers:
         table_logger.setLevel(logging.INFO)
-        table_logger.propagate = False  # No enviar al logger principal
+        # Propagar al logger principal para que Airflow capture errores via SSH stdout
+        table_logger.propagate = True
         
         # Formato detallado
         formatter = logging.Formatter(
-            "%(asctime)s | %(levelname)s | %(message)s",
+            "%(asctime)s | %(levelname)s | [%(name)s] %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
         )
         
@@ -44,7 +45,7 @@ def setup_table_logger(table_name: str) -> logging.Logger:
         file_handler.setFormatter(formatter)
         table_logger.addHandler(file_handler)
         
-        # Handler para consola
+        # Handler para consola (stdout del servidor 24 -> capturado por SSHOperator en Airflow 142)
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
         table_logger.addHandler(stream_handler)
