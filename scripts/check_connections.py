@@ -11,18 +11,31 @@ from pathlib import Path
 app_dir = Path(__file__).parent.parent / "app"
 sys.path.insert(0, str(app_dir))
 
+import os
+import re
 import yaml
 from dotenv import load_dotenv
 from config.logging_config import logger
 
+def _resolve_env_vars(config):
+    if isinstance(config, str):
+        return re.sub(r'\$\{(\w+)\}', lambda m: os.getenv(m.group(1), m.group(0)), config)
+    elif isinstance(config, dict):
+        return {k: _resolve_env_vars(v) for k, v in config.items()}
+    elif isinstance(config, list):
+        return [_resolve_env_vars(i) for i in config]
+    return config
+
 def check_connections(config_path="config/pipeline.yaml", env_path=".env"):
-    load_dotenv(env_path)
+    load_dotenv(env_path, override=True)
     logger.info("="*60)
     logger.info("[CHECK] Validando conexiones Oracle y PostgreSQL...")
+    logger.info(f"[CHECK] .env cargado desde: {Path(env_path).resolve()} - ORACLE_HOST_MSP={os.getenv('ORACLE_HOST_MSP')}")
     logger.info("="*60)
 
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
+    config = _resolve_env_vars(config)
 
     from core.factory import ExtractorFactory, LoaderFactory
 
