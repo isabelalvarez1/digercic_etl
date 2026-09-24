@@ -251,11 +251,10 @@ class PipelineManager:
                     prefetch_queue.append((0, first_data))
                     table_logger.info(f"[6/6] Primer chunk listo - iniciando carga inmediata")
 
+                # Batch fijo para no desalinear OFFSET (el adaptive rompía la secuencia y perdía 500k)
+                original_batch_size = batch_size
                 while offset < total_rows:
                     monitor.wait_for_resources(task_name=name)
-                    
-                    # Ajustar chunk size dinámicamente según recursos
-                    batch_size = monitor.adjust_chunk_size(batch_size)
 
                     # Obtener chunk de la cola
                     with prefetch_lock:
@@ -304,7 +303,7 @@ class PipelineManager:
 
                     status = monitor.get_status()
                     resource_level = monitor.get_resource_level()
-                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {batch_size:,}")
+                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {original_batch_size:,}")
 
                 table_end_time = datetime.now()
                 table_duration = (table_end_time - table_start_time).total_seconds()
