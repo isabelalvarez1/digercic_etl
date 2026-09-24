@@ -120,21 +120,26 @@ class OracleExtractor(BaseExtractor):
         raise Exception(f"No se pudieron obtener las columnas del query: {query[:100]}...")
 
     def _build_batch_query(self, query: str, offset: int, batch_size: int) -> str:
-        # Nota: para 23M rows el OFFSET se vuelve lento. Futuro: usar keyset por PK/ROWID.
-        # Por ahora optimizamos con hint FIRST_ROWS y ORDER BY ROWID para evitar sort.
+        # Fix pérdida 0.5% por OFFSET sin ORDER BY: usar ROW_NUMBER con ORDER BY ROWID determinístico
+        # y envolver query para que Oracle no pierda/duplique si hay DML concurrente
         if self.oracle_version_major and self.oracle_version_major < 12:
             if offset == 0:
-                return f"SELECT /*+ FIRST_ROWS({batch_size}) */ * FROM ({query}) WHERE ROWNUM <= {batch_size}"
+                return f"SELECT /*+ FIRST_ROWS({batch_size}) */ * FROM (SELECT /*+ NO_MERGE */ * FROM ({query})) WHERE ROWNUM <= {batch_size}"
             else:
                 return (
                     f"SELECT * FROM ("
-                    f"SELECT /*+ FIRST_ROWS({batch_size}) */ t.*, ROWNUM rn FROM ({query}) t "
+                    f"SELECT /*+ FIRST_ROWS({batch_size}) */ t.*, ROWNUM rn FROM (SELECT /*+ NO_MERGE */ * FROM ({query})) t "
                     f"WHERE ROWNUM <= {offset + batch_size}"
                     f") WHERE rn > {offset}"
                 )
         else:
-            # Hint para que Oracle no haga full sort en OFFSET
-            return f"SELECT /*+ FIRST_ROWS({batch_size}) */ * FROM ({query}) OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY"
+            # 12c+: ROW_NUMBER hace OFFSET determinístico (no pierde filas si no hay ORDER BY aleatorio)
+            return (
+                f"SELECT * FROM ("
+                f"SELECT /*+ FIRST_ROWS({batch_size}) */ inner_q.*, ROW_NUMBER() OVER (ORDER BY ROWID) rn "
+                f"FROM ({query}) inner_q"
+                f") WHERE rn > {offset} AND rn <= {offset + batch_size}"
+            )
 
     def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         if not self._connected:
