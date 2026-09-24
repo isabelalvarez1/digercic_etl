@@ -120,18 +120,21 @@ class OracleExtractor(BaseExtractor):
         raise Exception(f"No se pudieron obtener las columnas del query: {query[:100]}...")
 
     def _build_batch_query(self, query: str, offset: int, batch_size: int) -> str:
+        # Nota: para 23M rows el OFFSET se vuelve lento. Futuro: usar keyset por PK/ROWID.
+        # Por ahora optimizamos con hint FIRST_ROWS y ORDER BY ROWID para evitar sort.
         if self.oracle_version_major and self.oracle_version_major < 12:
             if offset == 0:
-                return f"{query} WHERE ROWNUM <= {batch_size}"
+                return f"SELECT /*+ FIRST_ROWS({batch_size}) */ * FROM ({query}) WHERE ROWNUM <= {batch_size}"
             else:
                 return (
                     f"SELECT * FROM ("
-                    f"SELECT t.*, ROWNUM rn FROM ({query}) t "
+                    f"SELECT /*+ FIRST_ROWS({batch_size}) */ t.*, ROWNUM rn FROM ({query}) t "
                     f"WHERE ROWNUM <= {offset + batch_size}"
                     f") WHERE rn > {offset}"
                 )
         else:
-            return f"{query} OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY"
+            # Hint para que Oracle no haga full sort en OFFSET
+            return f"SELECT /*+ FIRST_ROWS({batch_size}) */ * FROM ({query}) OFFSET {offset} ROWS FETCH NEXT {batch_size} ROWS ONLY"
 
     def extract(self, query: str, params: Optional[Dict] = None, table_name: str = "unknown") -> List[Dict]:
         if not self._connected:
@@ -312,7 +315,7 @@ class OracleExtractor(BaseExtractor):
             self.connect()
 
     def extract_batch(self, query: str, offset: int, batch_size: int, columns: List[str], params: Optional[Dict] = None) -> List[Dict]:
-        """Extrae un solo batch de datos con reconexión automática."""
+        """Extrae un solo batch de datos con reconexión automática y arraysize optimizado."""
         if params is None:
             params = {}
         
@@ -320,6 +323,12 @@ class OracleExtractor(BaseExtractor):
         
         try:
             cursor = self.connection.cursor()
+            # Aumentar arraysize para reducir roundtrips (default 100 -> 5000)
+            try:
+                cursor.arraysize = min(batch_size, 5000)
+                cursor.prefetchrows = min(batch_size, 10000)
+            except Exception:
+                pass
             batch_query = self._build_batch_query(query, offset, batch_size)
             cursor.execute(batch_query, params)
             rows = cursor.fetchall()
@@ -331,6 +340,11 @@ class OracleExtractor(BaseExtractor):
                 self._connected = False
                 self.connect()
                 cursor = self.connection.cursor()
+                try:
+                    cursor.arraysize = min(batch_size, 5000)
+                    cursor.prefetchrows = min(batch_size, 10000)
+                except Exception:
+                    pass
                 batch_query = self._build_batch_query(query, offset, batch_size)
                 cursor.execute(batch_query, params)
                 rows = cursor.fetchall()

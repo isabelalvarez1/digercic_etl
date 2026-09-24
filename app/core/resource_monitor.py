@@ -43,8 +43,8 @@ class ResourceMonitor:
         self.current_chunk_size = None
 
     def get_status(self):
-        """Obtiene el estado actual de los recursos."""
-        cpu = psutil.cpu_percent(interval=1)
+        """Obtiene el estado actual de los recursos. No bloqueante."""
+        cpu = psutil.cpu_percent(interval=None)
         ram = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
         

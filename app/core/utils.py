@@ -58,13 +58,13 @@ def calculate_optimal_config(total_rows: int, num_columns: int) -> Dict[str, Any
     batch_max = int(os.getenv("BATCH_SIZE_MAX", "500000"))
     bytes_per_cell = int(os.getenv("BATCH_BYTES_PER_CELL", "100"))
     
-    # === AJUSTAR BATCH_MAX SEGÚN COLUMNAS ===
+    # === AJUSTAR BATCH_MAX SEGÚN COLUMNAS (92 cols = filas anchas) ===
     if num_columns > 80:
-        batch_max = min(batch_max, 150000)
+        batch_max = min(batch_max, 25000)
     elif num_columns > 50:
-        batch_max = min(batch_max, 250000)
+        batch_max = min(batch_max, 40000)
     elif num_columns > 30:
-        batch_max = min(batch_max, 400000)
+        batch_max = min(batch_max, 80000)
     
     # === CALCULAR BATCH SIZE ===
     bytes_per_row = num_columns * bytes_per_cell
@@ -193,11 +193,11 @@ def calculate_optimal_batch_size(total_rows: int, resources: Dict[str, Any], num
     # Calcular basado en memoria
     bytes_per_row = num_columns * bytes_per_cell
     
-    # Ajustar batch_max segun columnas
+    # Ajustar batch_max segun columnas (mismo criterio)
     if num_columns > 80:
-        batch_max = min(batch_max, 150000)
+        batch_max = min(batch_max, 25000)
     elif num_columns > 50:
-        batch_max = min(batch_max, 250000)
+        batch_max = min(batch_max, 40000)
     
     memory_for_batch = memory_available * 1024 * 1024 * 1024 * memory_percent
     memory_based_batch = int(memory_for_batch / bytes_per_row)
