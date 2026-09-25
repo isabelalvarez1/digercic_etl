@@ -140,11 +140,10 @@ class PipelineManager:
 
     def _run_streaming(self, extractions: List[Dict], loads: List[Dict]) -> Dict[str, Any]:
         """
-        Modo streaming: extrae de Oracle y carga a PostgreSQL chunk por chunk.
-        Incluye batch dinamico y workers paralelos (pre-fetch).
+        Lee cada consulta Oracle una sola vez y carga lotes con prefetch acotado.
         """
-        import concurrent.futures
         import threading
+        from queue import Queue, Empty, Full
         
         logger.info("=" * 50)
         logger.info("MODO STREAMING: Extract + Load por chunks")
@@ -169,12 +168,14 @@ class PipelineManager:
                     break
 
             if not load_config:
-                logger.warning(f"[{name}] No hay load configurado, usando modo normal")
-                continue
+                raise ValueError(f"[{name}] No hay carga configurada")
 
             target_type = load_config.get("target")
             target_config = load_config.get("config", {})
             table = load_config.get("table", "")
+            table_logger = setup_table_logger(table)
+            extractor = loader = monitor = None
+            total_loaded = 0
 
             try:
                 extractor = ExtractorFactory.create(source_type, source_config)
@@ -209,19 +210,16 @@ class PipelineManager:
                 from core.utils import calculate_optimal_config
                 auto_config = calculate_optimal_config(total_rows, num_columns)
                 batch_size = auto_config["batch_size"]
-                threads_extract = auto_config["threads_extract"]
-                prefetch_chunks = auto_config["prefetch_chunks"]
-                
-                # Verificar si chunks adaptativos están habilitados
-                adaptive_enabled = os.getenv("ADAPTIVE_CHUNKS", "true").lower() == "true"
+                # Una sola consulta Oracle en un productor; un lote adicional
+                # en memoria mientras PostgreSQL carga el lote actual.
                 
                 table_logger.info(f"[4/6] Configuración automática:")
                 table_logger.info(f"  CPU: {auto_config['system']['cpu_cores']} cores | RAM: {auto_config['system']['memory_available_gb']}GB disponible")
                 table_logger.info(f"  Batch Size: {batch_size:,} registros/chunk")
                 table_logger.info(f"  Chunks estimados: {auto_config['batch_count']:,}")
-                table_logger.info(f"  Threads: {threads_extract} | Pre-fetch: {prefetch_chunks}")
+                table_logger.info("  Pre-fetch: 1 lote (cursor Oracle unico)")
                 table_logger.info(f"  Memoria estimada: {auto_config['estimated_memory_mb']:.1f} MB")
-                table_logger.info(f"  Tiempo estimado: {auto_config['estimated_time_copy_min']:.1f} min")
+                table_logger.info("  Tiempo real: consultar duracion al finalizar")
 
                 table_logger.info(f"[5/6] Preparando tabla destino...")
                 loader.prepare_table(table, columns)
@@ -230,96 +228,72 @@ class PipelineManager:
                 table_logger.info(f"[6/6] Iniciando extracción y carga...")
                 table_logger.info(f"{'-'*60}")
 
-                prefetch_queue = []
-                prefetch_lock = threading.Lock()
+                prefetch_queue = Queue(maxsize=1)
+                stop = threading.Event()
 
-                def extract_chunk_at(offset_val):
-                    if offset_val < total_rows:
-                        data = extractor.extract_batch(query, offset_val, batch_size, columns, params)
-                        with prefetch_lock:
-                            prefetch_queue.append((offset_val, data))
+                def produce():
+                    for data in extractor.iter_batches(query, batch_size, params):
+                        if data and list(data[0]) != columns:
+                            raise RuntimeError(f"[{name}] Las columnas de Oracle cambiaron durante la lectura")
+                        while not stop.is_set():
+                            try:
+                                prefetch_queue.put(data, timeout=1)
+                                break
+                            except Full:
+                                continue
+                        if stop.is_set():
+                            break
 
                 chunk_num = 0
-                total_loaded = 0
-                offset = 0
                 chunk_start = datetime.now()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(produce)
+                    try:
+                        while True:
+                            try:
+                                chunk_data = prefetch_queue.get(timeout=1)
+                            except Empty:
+                                if future.done():
+                                    future.result()  # propaga error Oracle
+                                    break
+                                continue
 
-                # Extraer solo el primer chunk para empezar rápido
-                if total_rows > 0:
-                    table_logger.info(f"[6/6] Extrayendo primer chunk...")
-                    first_data = extractor.extract_batch(query, 0, batch_size, columns, params)
-                    prefetch_queue.append((0, first_data))
-                    table_logger.info(f"[6/6] Primer chunk listo - iniciando carga inmediata")
+                            monitor.wait_for_resources(task_name=name)
+                            loaded = loader.insert_batch(chunk_data, table)
+                            if loaded != len(chunk_data):
+                                raise RuntimeError(f"[{name}] COPY cargo {loaded} de {len(chunk_data)} filas")
+                            total_loaded += loaded
+                            chunk_num += 1
 
-                # Batch fijo para no desalinear OFFSET (el adaptive rompía la secuencia y perdía 500k)
-                original_batch_size = batch_size
-                while offset < total_rows:
-                    monitor.wait_for_resources(task_name=name)
-
-                    # Obtener chunk de la cola
-                    with prefetch_lock:
-                        chunk_data = None
-                        for i, (off, data) in enumerate(prefetch_queue):
-                            if off == offset:
-                                chunk_data = data
-                                prefetch_queue.pop(i)
-                                break
-
-                    if not chunk_data:
-                        break
-
-                    # Lanzar pre-fetch de chunks faltantes
-                    pf_threads = []
-                    for i in range(prefetch_chunks):
-                        next_offset = offset + batch_size * (i + 1)
-                        if next_offset < total_rows:
-                            # Verificar si ya esta en la cola
-                            with prefetch_lock:
-                                already_queued = any(off == next_offset for off, _ in prefetch_queue)
-                            if not already_queued:
-                                pf_thread = threading.Thread(target=extract_chunk_at, args=(next_offset,))
-                                pf_threads.append(pf_thread)
-                                pf_thread.start()
-
-                    # Cargar chunk actual
-                    loaded = loader.insert_batch(chunk_data, table)
-                    total_loaded += loaded
-
-                    offset += batch_size
-                    chunk_num += 1
-
-                    # Esperar pre-fetch threads
-                    for pf_thread in pf_threads:
-                        pf_thread.join()
-
-                    chunk_end = datetime.now()
-                    chunk_duration = (chunk_end - chunk_start).total_seconds()
-                    chunk_start = chunk_end
-
-                    percent = (total_loaded / total_rows) * 100 if total_rows > 0 else 100
-                    remaining = total_rows - total_loaded
-                    eta_seconds = (remaining / (total_loaded / chunk_duration)) if total_loaded > 0 and chunk_duration > 0 else 0
-                    eta_min = int(eta_seconds / 60)
-
-                    status = monitor.get_status()
-                    resource_level = monitor.get_resource_level()
-                    table_logger.info(f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | ETA: {eta_min}min | CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB | Chunk: {original_batch_size:,}")
+                            chunk_end = datetime.now()
+                            chunk_duration = (chunk_end - chunk_start).total_seconds()
+                            chunk_start = chunk_end
+                            percent = (total_loaded / total_rows) * 100 if total_rows else 100
+                            status = monitor.get_status()
+                            table_logger.info(
+                                f"  CHUNK {chunk_num} | {loaded:,} registros | {chunk_duration:.1f}s | "
+                                f"Total: {total_loaded:,}/{total_rows:,} ({percent:.1f}%) | "
+                                f"CPU: {status['cpu_percent']:.1f}% | RAM: {status['ram_available_gb']:.1f}GB"
+                            )
+                        future.result()
+                    finally:
+                        stop.set()
 
                 table_end_time = datetime.now()
                 table_duration = (table_end_time - table_start_time).total_seconds()
                 
-                # Validación: warning si hay discrepancia (puede ser por inserts concurrentes en Oracle)
-                # Solo falla el DAG si es 0 o pérdida >5%
                 if total_loaded != total_rows:
-                    diff = abs(total_loaded - total_rows)
-                    pct = (diff / total_rows * 100) if total_rows else 0
-                    if total_loaded == 0:
-                        raise RuntimeError(f"Carga fallida: 0 registros cargados de {total_rows:,} esperados")
-                    elif pct > 5:
-                        raise RuntimeError(f"Carga incompleta: {total_loaded:,}/{total_rows:,} ({pct:.1f}% faltante) - supera umbral 5%")
-                    else:
-                        table_logger.warning(f"ADVERTENCIA: discrepancia {total_loaded:,}/{total_rows:,} ({pct:.2f}%) - se considera exitoso (posible insert concurrente)")
-                        logger.warning(f"[{name}] Discrepancia menor {pct:.2f}% - no marca fallo")
+                    raise RuntimeError(
+                        f"[{name}] Conteo diferente: {total_loaded:,} cargados / {total_rows:,} "
+                        "contados antes de extraer; verificar cambios concurrentes en Oracle"
+                    )
+                if loader.truncate_before_load:
+                    destination_rows = loader.count_rows(table)
+                    if destination_rows != total_loaded:
+                        raise RuntimeError(
+                            f"[{name}] PostgreSQL tiene {destination_rows:,} filas, "
+                            f"pero COPY reporto {total_loaded:,}"
+                        )
 
                 extraction_results[name] = total_loaded
                 load_results[name] = total_loaded
@@ -335,10 +309,6 @@ class PipelineManager:
                 # Log también al logger principal para que Airflow lo capture
                 logger.info(f"[{name}] COMPLETADO: {total_loaded:,}/{total_rows:,} en {table_duration:.1f}s")
 
-                monitor.unregister_connection()
-                extractor.disconnect()
-                loader.disconnect()
-                
                 # Liberar memoria después de cada tabla
                 gc.collect()
                 ram_after = psutil.virtual_memory().available / (1024**3)
@@ -355,7 +325,7 @@ class PipelineManager:
                 table_logger.error(f"  Error: {str(e)}")
                 table_logger.error(f"  Tipo: {type(e).__name__}")
                 table_logger.error(f"  Tiempo hasta error: {table_duration:.1f}s")
-                table_logger.error(f"  Registros procesados antes del error: {total_loaded:,}" if 'total_loaded' in locals() else "  Registros procesados: 0")
+                table_logger.error(f"  Registros procesados antes del error: {total_loaded:,}")
                 table_logger.error(f"{'='*60}")
                 
                 # También log en el logger general para visibilidad en Airflow
@@ -365,6 +335,13 @@ class PipelineManager:
                 load_results[name] = 0
                 # No tragarse el error: propagarlo para que el pipeline falle
                 raise
+            finally:
+                if monitor and monitor.active_connections:
+                    monitor.unregister_connection()
+                if extractor:
+                    extractor.disconnect()
+                if loader:
+                    loader.disconnect()
 
         elapsed = (datetime.now() - start_time).seconds
 

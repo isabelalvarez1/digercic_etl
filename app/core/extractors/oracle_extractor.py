@@ -298,6 +298,29 @@ class OracleExtractor(BaseExtractor):
         cursor.close()
         return columns
 
+    def iter_batches(self, query: str, batch_size: int, params: Optional[Dict] = None):
+        """Lee una sola consulta Oracle por lotes desde un cursor consistente.
+
+        Si la conexion falla a mitad de lectura, se propaga el error: reiniciar
+        el cursor desde cero duplicaria las filas ya cargadas.
+        """
+        if batch_size <= 0:
+            raise ValueError("batch_size debe ser positivo")
+        self._ensure_connected()
+        cursor = self.connection.cursor()
+        try:
+            cursor.arraysize = min(batch_size, 1000)
+            cursor.prefetchrows = min(batch_size, 1000)
+            cursor.execute(query, params or {})
+            columns = [desc[0] for desc in cursor.description]
+            while True:
+                rows = cursor.fetchmany(batch_size)
+                if not rows:
+                    break
+                yield [dict(zip(columns, row)) for row in rows]
+        finally:
+            cursor.close()
+
     def _is_connected(self) -> bool:
         """Verifica si la conexión está activa."""
         if not self._connected or not self.connection:

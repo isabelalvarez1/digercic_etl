@@ -1,6 +1,7 @@
 import re
 import polars as pl
 import psycopg
+from psycopg import sql
 from typing import Any, Dict, List
 from datetime import datetime
 from config.logging_config import logger, setup_table_logger
@@ -386,6 +387,13 @@ class PostgresLoader(BaseLoader):
                 logger.error(f"[PostgresLoader] INSERT también falló: {e2}")
                 logger.error(f"[PostgresLoader] Tabla: {table}, Registros: {len(data)}")
                 raise
+
+    def count_rows(self, table: str) -> int:
+        """Confirma el conteo real en destino tras finalizar una carga completa."""
+        self._ensure_connected()
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
+            return cursor.fetchone()[0]
 
     def _copy_batch(self, data: List[Dict], table: str) -> int:
         """Inserta usando COPY (10-50x mas rapido que INSERT)."""
