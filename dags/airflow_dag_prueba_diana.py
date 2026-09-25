@@ -67,6 +67,7 @@ with DAG(
     start_date=pendulum.datetime(2026, 8, 31, tz="America/Guayaquil"),
     schedule_interval="30 11 * * *",
     catchup=False,
+    max_active_runs=1,
 ) as dag:
 
     inicio = DummyOperator(task_id="inicio")

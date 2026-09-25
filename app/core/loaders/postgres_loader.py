@@ -21,6 +21,7 @@ class PostgresLoader(BaseLoader):
         self.batch_size = config.get("batch_size")  # None = automatico
         self.column_mapping = config.get("column_mapping", {})  # Solo para renombrar explicitamente
         self.truncate_before_load = config.get("truncate_before_load", False)
+        self._locked_table = None
 
     def _standardize_column_name(self, col: str) -> str:
         """
@@ -322,8 +323,7 @@ class PostgresLoader(BaseLoader):
 
     def prepare_table(self, table: str, columns: List[str]) -> None:
         """Prepara la tabla destino: crea si no existe, trunca si se configuro."""
-        if not self._connected:
-            self.connect()
+        self.acquire_table_lock(table)
 
         cursor = self.connection.cursor()
 
@@ -337,16 +337,45 @@ class PostgresLoader(BaseLoader):
         table_exists = cursor.fetchone()[0]
 
         if not table_exists:
-            col_defs = ", ".join([f"{col} TEXT" for col in columns])
-            cursor.execute(f"CREATE TABLE {table} ({col_defs})")
+            col_defs = sql.SQL(", ").join(
+                sql.SQL("{} TEXT").format(sql.Identifier(col)) for col in columns
+            )
+            cursor.execute(
+                sql.SQL("CREATE TABLE {} ({})").format(sql.Identifier("public", table), col_defs)
+            )
             self.connection.commit()
             logger.info(f"[PostgresLoader] Tabla {table} creada")
         elif self.truncate_before_load:
-            cursor.execute(f"TRUNCATE TABLE {table} CASCADE")
+            cursor.execute(sql.SQL("TRUNCATE TABLE {} CASCADE").format(sql.Identifier("public", table)))
             self.connection.commit()
             logger.info(f"[PostgresLoader] Tabla {table} truncada")
 
         cursor.close()
+
+    def acquire_table_lock(self, table: str) -> None:
+        """Impide dos ejecuciones de este ETL sobre la misma tabla a la vez.
+
+        Es un bloqueo de sesion: sobrevive a los COMMIT por lote y se libera
+        al cerrar la conexion. No protege frente a escritores externos que
+        no utilicen este mismo bloqueo.
+        """
+        if not self._connected:
+            self.connect()
+        if self._locked_table == table:
+            return
+        if self._locked_table:
+            raise RuntimeError(f"Ya se esta cargando {self._locked_table} con esta conexion")
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_try_advisory_lock(hashtext('digercic_etl'), hashtext(%s))",
+                (table,),
+            )
+            acquired = cursor.fetchone()[0]
+        self.connection.commit()
+        if not acquired:
+            raise RuntimeError(f"Ya existe otra captacion activa para la tabla {table}")
+        self._locked_table = table
+        logger.info(f"[PostgresLoader] Tabla {table} reservada para esta captacion")
 
     def _is_connected(self) -> bool:
         """Verifica si la conexión está activa."""
@@ -365,6 +394,11 @@ class PostgresLoader(BaseLoader):
     def _ensure_connected(self) -> None:
         """Asegura que la conexión esté activa, reconecta si es necesario."""
         if not self._is_connected():
+            if self._locked_table:
+                raise RuntimeError(
+                    f"Conexion PostgreSQL perdida durante carga de {self._locked_table}; "
+                    "no se puede continuar sin el bloqueo de tabla"
+                )
             logger.warning("[PostgresLoader] Conexión perdida, reconectando...")
             self._connected = False
             self.connect()
@@ -393,15 +427,17 @@ class PostgresLoader(BaseLoader):
         """Confirma el conteo real en destino tras finalizar una carga completa."""
         self._ensure_connected()
         with self.connection.cursor() as cursor:
-            cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier(table)))
+            cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(sql.Identifier("public", table)))
             return cursor.fetchone()[0]
 
     def _copy_batch(self, data: List[Dict], table: str) -> int:
         """Inserta usando COPY (10-50x mas rapido que INSERT)."""
         columns = list(data[0].keys())
-        col_names = ", ".join(columns)
+        col_names = sql.SQL(", ").join(sql.Identifier(col) for col in columns)
 
-        copy_sql = f"COPY {table} ({col_names}) FROM STDIN (FORMAT text)"
+        copy_sql = sql.SQL("COPY {} ({}) FROM STDIN (FORMAT text)").format(
+            sql.Identifier("public", table), col_names
+        )
         with self.connection.cursor() as cursor:
             with cursor.copy(copy_sql) as copy:
                 for row in data:
@@ -437,4 +473,5 @@ class PostgresLoader(BaseLoader):
         if self.connection:
             self.connection.close()
             self._connected = False
+            self._locked_table = None
             logger.info("[PostgresLoader] Desconectado")

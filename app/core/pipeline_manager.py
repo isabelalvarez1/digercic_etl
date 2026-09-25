@@ -196,6 +196,7 @@ class PipelineManager:
                 table_logger.info(f"[2/6] Conectando a PostgreSQL...")
                 loader.connect()
                 table_logger.info(f"[2/6] Conexión PostgreSQL exitosa")
+                loader.acquire_table_lock(table)
 
                 monitor.register_connection()
 

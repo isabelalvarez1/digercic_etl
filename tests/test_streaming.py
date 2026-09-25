@@ -5,7 +5,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +46,9 @@ class FakeLoader:
         self.truncate_before_load = True
 
     def connect(self):
+        pass
+
+    def acquire_table_lock(self, table):
         pass
 
     def prepare_table(self, table, columns):
@@ -169,7 +172,8 @@ class StreamingTests(unittest.TestCase):
 
 
 class PostgresCopyTests(unittest.TestCase):
-    def test_error_despues_del_copy_no_inserta_lote_dos_veces(self):
+    @staticmethod
+    def load_loader():
         base = types.ModuleType("core.loaders.base_loader")
         base.BaseLoader = type("BaseLoader", (), {})
         logging_config = types.ModuleType("config.logging_config")
@@ -194,13 +198,33 @@ class PostgresCopyTests(unittest.TestCase):
             )
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            loader = module.PostgresLoader.__new__(module.PostgresLoader)
-            loader._ensure_connected = lambda: None
-            loader._copy_batch = Mock(side_effect=RuntimeError("fallo tras confirmar COPY"))
-            loader._insert_batch_fallback = Mock()
-            with self.assertRaisesRegex(RuntimeError, "fallo tras confirmar COPY"):
-                loader.insert_batch([{"ID": 1}], "destino")
-            loader._insert_batch_fallback.assert_not_called()
+        return module.PostgresLoader.__new__(module.PostgresLoader)
+
+    def test_error_despues_del_copy_no_inserta_lote_dos_veces(self):
+        loader = self.load_loader()
+        loader._ensure_connected = lambda: None
+        loader._copy_batch = Mock(side_effect=RuntimeError("fallo tras confirmar COPY"))
+        loader._insert_batch_fallback = Mock()
+        with self.assertRaisesRegex(RuntimeError, "fallo tras confirmar COPY"):
+            loader.insert_batch([{"ID": 1}], "destino")
+        loader._insert_batch_fallback.assert_not_called()
+
+    def test_otra_captacion_bloquea_la_misma_tabla(self):
+        loader = self.load_loader()
+        loader.connection = MagicMock()
+        loader._connected = True
+        loader._locked_table = None
+        cursor = loader.connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = (False,)
+        with self.assertRaisesRegex(RuntimeError, "otra captacion activa"):
+            loader.acquire_table_lock("destino")
+        self.assertIsNone(loader._locked_table)
+
+        cursor.fetchone.return_value = (True,)
+        loader.acquire_table_lock("destino")
+        loader.acquire_table_lock("destino")
+        self.assertEqual(loader._locked_table, "destino")
+        self.assertEqual(cursor.execute.call_count, 2)
 
 
 class OracleCursorTests(unittest.TestCase):
