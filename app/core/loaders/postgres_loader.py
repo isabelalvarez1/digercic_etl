@@ -370,7 +370,11 @@ class PostgresLoader(BaseLoader):
             self.connect()
 
     def insert_batch(self, data: List[Dict], table: str) -> int:
-        """Inserta un batch de registros usando COPY (rapido) o fallback a INSERT."""
+        """Inserta un batch usando COPY; un error nunca reintenta el mismo lote.
+
+        Ante una excepcion posterior al COMMIT no sabemos si el lote quedo
+        confirmado: repetirlo mediante INSERT podria duplicar todas sus filas.
+        """
         self._ensure_connected()
 
         if not data:
@@ -379,14 +383,11 @@ class PostgresLoader(BaseLoader):
         try:
             return self._copy_batch(data, table)
         except Exception as e:
-            logger.warning(f"[PostgresLoader] COPY fallo ({len(data)} registros), usando INSERT: {e}")
-            self._ensure_connected()
-            try:
-                return self._insert_batch_fallback(data, table)
-            except Exception as e2:
-                logger.error(f"[PostgresLoader] INSERT también falló: {e2}")
-                logger.error(f"[PostgresLoader] Tabla: {table}, Registros: {len(data)}")
-                raise
+            logger.exception(
+                f"[PostgresLoader] COPY fallo en {table} ({len(data)} filas). "
+                "No se reintenta el lote: verificar la carga antes de reiniciar."
+            )
+            raise
 
     def count_rows(self, table: str) -> int:
         """Confirma el conteo real en destino tras finalizar una carga completa."""
@@ -400,14 +401,13 @@ class PostgresLoader(BaseLoader):
         columns = list(data[0].keys())
         col_names = ", ".join(columns)
 
-        cursor = self.connection.cursor()
         copy_sql = f"COPY {table} ({col_names}) FROM STDIN (FORMAT text)"
-        with cursor.copy(copy_sql) as copy:
-            for row in data:
-                values = tuple(row[col] for col in columns)
-                copy.write_row(values)
+        with self.connection.cursor() as cursor:
+            with cursor.copy(copy_sql) as copy:
+                for row in data:
+                    values = tuple(row[col] for col in columns)
+                    copy.write_row(values)
         self.connection.commit()
-        cursor.close()
         return len(data)
 
     def _insert_batch_fallback(self, data: List[Dict], table: str) -> int:

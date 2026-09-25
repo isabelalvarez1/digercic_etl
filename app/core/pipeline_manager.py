@@ -223,6 +223,13 @@ class PipelineManager:
 
                 table_logger.info(f"[5/6] Preparando tabla destino...")
                 loader.prepare_table(table, columns)
+                if loader.truncate_before_load:
+                    initial_rows = loader.count_rows(table)
+                    if initial_rows != 0:
+                        raise RuntimeError(
+                            f"[{name}] Tabla {table} tiene {initial_rows:,} filas "
+                            "despues de prepararla; otra carga podria estar escribiendo"
+                        )
                 table_logger.info(f"[5/6] Tabla lista para carga")
 
                 table_logger.info(f"[6/6] Iniciando extracción y carga...")

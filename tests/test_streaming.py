@@ -5,7 +5,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,9 +158,49 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(loader.rows, [])
 
     def test_conteo_real_postgres_debe_coincidir(self):
-        with patch.object(FakeLoader, "count_rows", return_value=2):
+        with patch.object(FakeLoader, "count_rows", side_effect=[0, 2]):
             with self.assertRaisesRegex(RuntimeError, "PostgreSQL tiene 2 filas"):
                 self.run_pipeline(FakeExtractor([{"ID": n} for n in range(3)]))
+
+    def test_destino_con_filas_antes_de_cargar_falla(self):
+        with patch.object(FakeLoader, "count_rows", return_value=1):
+            with self.assertRaisesRegex(RuntimeError, "despues de prepararla"):
+                self.run_pipeline(FakeExtractor([{"ID": n} for n in range(3)]))
+
+
+class PostgresCopyTests(unittest.TestCase):
+    def test_error_despues_del_copy_no_inserta_lote_dos_veces(self):
+        base = types.ModuleType("core.loaders.base_loader")
+        base.BaseLoader = type("BaseLoader", (), {})
+        logging_config = types.ModuleType("config.logging_config")
+        logging_config.logger = logging.getLogger("test_postgres")
+        logging_config.setup_table_logger = lambda table: logging_config.logger
+        utils = types.ModuleType("core.utils")
+        utils.get_system_resources = lambda: {}
+        utils.calculate_optimal_batch_size = lambda *args: {}
+        psycopg = types.ModuleType("psycopg")
+        psycopg.sql = types.ModuleType("psycopg.sql")
+        with patch.dict(sys.modules, {
+            "polars": types.ModuleType("polars"),
+            "psycopg": psycopg,
+            "psycopg.sql": psycopg.sql,
+            "config.logging_config": logging_config,
+            "core.loaders.base_loader": base,
+            "core.utils": utils,
+        }):
+            sys.modules["polars"].DataFrame = object
+            spec = importlib.util.spec_from_file_location(
+                "postgres_loader_test", ROOT / "app/core/loaders/postgres_loader.py"
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            loader = module.PostgresLoader.__new__(module.PostgresLoader)
+            loader._ensure_connected = lambda: None
+            loader._copy_batch = Mock(side_effect=RuntimeError("fallo tras confirmar COPY"))
+            loader._insert_batch_fallback = Mock()
+            with self.assertRaisesRegex(RuntimeError, "fallo tras confirmar COPY"):
+                loader.insert_batch([{"ID": 1}], "destino")
+            loader._insert_batch_fallback.assert_not_called()
 
 
 class OracleCursorTests(unittest.TestCase):
